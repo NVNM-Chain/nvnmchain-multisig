@@ -16,6 +16,7 @@ import {
   gasToSend,
   getNetwork,
   getNetworkKey,
+  networkKeyForChainId,
   NETWORKS,
   setNetworkKey as persistNetwork,
   type NetworkKey,
@@ -119,7 +120,13 @@ export function useWallet(): Wallet {
       })
       .catch(() => {})
     const onAccounts = (accounts: Address[]) => setAccount(accounts?.[0] ?? null)
-    const onChain = () => readChain()
+    // Follow a network picked in the wallet, but not on load, so a link's network wins.
+    const onChain = (id: string) => {
+      const chainId = Number.parseInt(id, 16)
+      setWalletChainId(chainId)
+      const key = networkKeyForChainId(chainId)
+      if (key && key !== getNetworkKey()) persistNetwork(key)
+    }
     provider.on?.('accountsChanged', onAccounts)
     provider.on?.('chainChanged', onChain)
     return () => {
@@ -177,7 +184,13 @@ export function useWallet(): Wallet {
 
   const disconnect = useCallback(() => setAccount(null), [])
 
-  const setNetworkKey = useCallback((key: NetworkKey) => persistNetwork(key), [])
+  const setNetworkKey = useCallback(
+    (key: NetworkKey) => {
+      persistNetwork(key)
+      if (account) void switchNetwork()
+    },
+    [account, switchNetwork],
+  )
 
   return {
     provider,

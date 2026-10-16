@@ -247,7 +247,7 @@ export default function App() {
             ) : (
               <SafePicker
                 wallet={wallet}
-                trackedSafes={trackedSafes}
+                trackedSafes={trackedSafes.filter((s) => s.chainId === wallet.chainId)}
                 onLoad={handleLoad}
                 onUntrack={handleUntrack}
               />

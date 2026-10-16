@@ -30,21 +30,21 @@ function describe(decoded: DecodedWithAbi | null, selector: Hex, meta: TokenMeta
   if (!decoded) {
     return selector === '0x' ? 'empty call' : `unknown function ${selector}`
   }
-  const symbol = meta ? ` ${meta.symbol}` : ''
-  const decimals = meta?.decimals ?? 6
+  const units = (amount: bigint) =>
+    meta ? `${formatUnits(amount, meta.decimals)} ${meta.symbol}` : `${amount} base units`
   const args = decoded.args
   const name = decoded.fn.name
   if (name === 'transfer') {
     const [to, amount] = args as [Address, bigint]
-    return `Transfer ${formatUnits(amount, decimals)}${symbol} → ${shortAddress(to, 4)}`
+    return `Transfer ${units(amount)} → ${shortAddress(to, 4)}`
   }
   if (name === 'transferFrom') {
     const [from, to, amount] = args as [Address, Address, bigint]
-    return `Transfer ${formatUnits(amount, decimals)}${symbol} · ${shortAddress(from, 4)} → ${shortAddress(to, 4)}`
+    return `Transfer ${units(amount)} · ${shortAddress(from, 4)} → ${shortAddress(to, 4)}`
   }
   if (name === 'approve') {
     const [spender, amount] = args as [Address, bigint]
-    return `Approve ${formatUnits(amount, decimals)}${symbol} → ${shortAddress(spender, 4)}`
+    return `Approve ${units(amount)} → ${shortAddress(spender, 4)}`
   }
   return `${name}(${args.map(formatArg).join(', ')})`
 }

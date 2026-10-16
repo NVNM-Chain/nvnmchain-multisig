@@ -89,8 +89,9 @@ function QueuedTxCard({
   const onchain = ownerKeys.filter((o) => approved[o] && !offchain.includes(o))
   const total = offchain.length + onchain.length
   const executed = Boolean(item.executedTxHash)
-  const nonceOk = tx.nonce === info.nonce
-  const ready = total >= threshold && nonceOk && !executed
+  const stale = tx.nonce < info.nonce
+  const waiting = tx.nonce > info.nonce
+  const ready = total >= threshold && !stale && !waiting && !executed
   const me = wallet.account?.toLowerCase()
   const iAmOwner = me ? ownerKeys.includes(me) : false
   const signed = me ? offchain.includes(me) : false
@@ -212,10 +213,12 @@ function QueuedTxCard({
         </strong>
         {executed ? (
           <span className="badge ok"><span className="dot ok" /> executed</span>
-        ) : !nonceOk ? (
+        ) : stale ? (
           <span className="badge bad">stale nonce</span>
         ) : ready ? (
           <span className="badge info">ready to execute</span>
+        ) : waiting && total >= threshold ? (
+          <span className="badge warn">approved · waits for nonce {(tx.nonce - 1n).toString()}</span>
         ) : (
           <span className="badge warn">
             {total}/{threshold} approvals
@@ -256,7 +259,7 @@ function QueuedTxCard({
           </div>
         ))}
 
-      {!nonceOk && !executed && (
+      {stale && !executed && (
         <div className="notice warn" style={{ marginTop: 10 }}>
           The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>. These approvals
           were made for nonce <span className="mono">{tx.nonce.toString()}</span> and can no longer be
@@ -265,12 +268,12 @@ function QueuedTxCard({
       )}
 
       <div className="row" style={{ marginTop: 12 }}>
-        {!executed && nonceOk && iAmOwner && !signed && (
+        {!executed && !stale && iAmOwner && !signed && (
           <button className="btn small primary" onClick={sign} disabled={busy !== null}>
             {busy === 'sign' ? 'Signing…' : 'Sign (off-chain)'}
           </button>
         )}
-        {!executed && nonceOk && iAmOwner && !approvedByMe && (
+        {!executed && !stale && iAmOwner && !approvedByMe && (
           <button className="btn small" onClick={approveOnChain} disabled={busy !== null}>
             {busy === 'approve' ? 'Approving…' : 'Approve on-chain'}
           </button>

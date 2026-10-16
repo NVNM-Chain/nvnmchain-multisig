@@ -58,24 +58,22 @@ export function useSafeInfo(publicClient: PublicClient, safe: Address | null) {
 
 export type TokenMeta = { name: string; symbol: string; decimals: number }
 
-/** Resolve TIP-20 metadata (falls back to ERC-20 selectors). */
+/** TIP-20 metadata, or null until `decimals()` answers. */
 export function useTokenMeta(publicClient: PublicClient, token: Address | null) {
   const [meta, setMeta] = useState<TokenMeta | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    if (!token) {
-      setMeta(null)
-      return
-    }
+    setMeta(null)
+    if (!token) return
     ;(async () => {
       try {
         const [symbol, decimals, name] = await Promise.all([
           publicClient.readContract({ address: token, abi: tip20Abi, functionName: 'symbol' }).catch(() => ''),
-          publicClient.readContract({ address: token, abi: tip20Abi, functionName: 'decimals' }).catch(() => 6),
+          publicClient.readContract({ address: token, abi: tip20Abi, functionName: 'decimals' }),
           publicClient.readContract({ address: token, abi: tip20Abi, functionName: 'name' }).catch(() => ''),
         ])
-        if (!cancelled) setMeta({ symbol: symbol || 'TOKEN', decimals: Number(decimals), name })
+        if (!cancelled) setMeta({ symbol: symbol || 'TOKEN', decimals, name })
       } catch {
         if (!cancelled) setMeta(null)
       }

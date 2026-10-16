@@ -153,6 +153,12 @@ export function buildSafeTx(calls: SafeCall[], nonce: bigint): SafeTxParams {
   }
 }
 
+/** The lowest nonce, from the Safe's own upward, that no open transaction has taken. */
+export function nextFreeNonce(nonce: bigint, taken: bigint[]): bigint {
+  while (taken.includes(nonce)) nonce++
+  return nonce
+}
+
 const SAFE_TX_TYPEHASH = keccak256(
   toHex(
     'SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)',

@@ -121,12 +121,13 @@ export function formatUnits(value: bigint | null | undefined, decimals = 6): str
   return viemFormatUnits(value, decimals)
 }
 
-export function parseUnits(value: string, decimals = 6): bigint {
-  const neg = value.trim().startsWith('-')
-  const [whole, frac = ''] = value.trim().replace('-', '').split('.')
-  const padded = (frac + '0'.repeat(decimals)).slice(0, decimals)
-  const n = BigInt((whole || '0') + padded || '0')
-  return neg ? -n : n
+/** Parse a plain decimal amount into base units, rejecting other notations and excess decimals. */
+export function parseUnits(value: string, decimals: number): bigint {
+  const match = /^(\d*)\.?(\d*)$/.exec(value.trim())
+  if (!match || match[1] + match[2] === '') throw new Error(`"${value}" is not a decimal amount.`)
+  const fraction = match[2].replace(/0+$/, '')
+  if (fraction.length > decimals) throw new Error(`"${value}" has more than ${decimals} decimal places.`)
+  return BigInt(match[1] + fraction.padEnd(decimals, '0'))
 }
 
 export function errorMessage(e: unknown): string {

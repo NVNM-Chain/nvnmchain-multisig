@@ -3,6 +3,7 @@ import type { Address } from 'viem'
 import { getNetwork, getNetworkKey, networkKeyForChainId, setNetworkKey as persistNetwork, errorMessage } from './chain'
 import { useSafeInfo } from './lib/hooks'
 import { allAbis, type AbiEntry } from './lib/contracts'
+import { nextFreeNonce } from './lib/safe'
 import { loadPending, loadTrackedSafes, trackSafe, untrackSafe, upsertPending, type PendingTx, type TrackedSafe } from './lib/storage'
 import { clearShareFromLocation, readShareLink, type SignatureShare } from './lib/share'
 import { importPending, importSignatureShare } from './lib/coordinate'
@@ -104,12 +105,12 @@ export default function App() {
   const safePending = pending.filter(
     (p) => safe && p.safe.toLowerCase() === safe.toLowerCase() && p.chainId === wallet.chainId,
   )
-  const openCount = safePending.filter((p) => !p.executedTxHash).length
+  const open = safePending.filter((p) => !p.executedTxHash)
 
   const tabs: { key: Tab; label: string; badge?: number }[] = [
     { key: 'safe', label: safe ? 'Safe' : 'Create / Load' },
     { key: 'new', label: 'New transaction' },
-    { key: 'queue', label: 'Queue', badge: openCount || undefined },
+    { key: 'queue', label: 'Queue', badge: open.length || undefined },
     { key: 'contracts', label: 'Contracts' },
     { key: 'abis', label: 'Interfaces' },
   ]
@@ -236,7 +237,7 @@ export default function App() {
                 safe={safe}
                 info={info}
                 loading={infoLoading}
-                pendingCount={openCount}
+                pendingCount={open.length}
                 remembered={remembered}
                 onRemember={() => handleLoad(safe)}
                 onNewTx={() => setTab('new')}
@@ -259,6 +260,7 @@ export default function App() {
                 safe={safe}
                 info={info}
                 abis={abis}
+                nextNonce={nextFreeNonce(info.nonce, open.map((p) => BigInt(p.tx.nonce)))}
                 onQueued={(item) => setPending(upsertPending(item))}
               />
             ) : (

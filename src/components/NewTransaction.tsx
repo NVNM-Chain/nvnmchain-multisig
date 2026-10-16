@@ -7,6 +7,7 @@ import { emptyParam, type ParamValue } from '../lib/abiparams'
 import {
   buildSafeTx,
   computeSafeTxHash,
+  isBytes,
   normalizeSignatureV,
   recoverSigner,
   safeTxTypedData,
@@ -70,12 +71,14 @@ export function NewTransaction({
   safe,
   info,
   abis,
+  nextNonce,
   onQueued,
 }: {
   wallet: Wallet
   safe: Address
   info: SafeInfo
   abis: readonly AbiEntry[]
+  nextNonce: bigint
   onQueued: (item: PendingTx) => void
 }) {
   const [drafts, setDrafts] = useState<Draft[]>([blank()])
@@ -83,6 +86,8 @@ export function NewTransaction({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<Hex | null>(null)
   const [preview, setPreview] = useState<SafeTxParams | null>(null)
+  const [nonceText, setNonceText] = useState('')
+  const iAmOwner = info.owners.some((o) => o.toLowerCase() === wallet.account?.toLowerCase())
 
   const update = (id: string, patch: Partial<Draft>) => {
     setPreview(null)
@@ -97,13 +102,23 @@ export function NewTransaction({
     setDrafts((ds) => (ds.length === 1 ? ds : ds.filter((d) => d.id !== id)))
   }
 
+  /** The nonce typed in, or the next free one when the field is empty. */
+  const chosenNonce = (): bigint => {
+    const text = nonceText.trim()
+    if (text === '') return nextNonce
+    if (!/^\d+$/.test(text) || BigInt(text) < info.nonce) {
+      throw new Error(`The nonce must be a whole number, ${info.nonce} or higher.`)
+    }
+    return BigInt(text)
+  }
+
   const buildPreview = async () => {
     setBusy(true)
     setError(null)
     try {
       const calls: SafeCall[] = []
       for (const d of drafts) calls.push(await encodeDraft(d))
-      setPreview(buildSafeTx(calls, info.nonce))
+      setPreview(buildSafeTx(calls, chosenNonce()))
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -116,15 +131,18 @@ export function NewTransaction({
       if (!isAddress(d.token)) throw new Error('Invalid token address.')
       if (!isAddress(d.recipient)) throw new Error('Invalid recipient address.')
       if (!d.amount.trim()) throw new Error('Enter an amount.')
+      const token = getAddress(d.token)
       const decimals = await wallet.publicClient
-        .readContract({ address: getAddress(d.token), abi: tip20Abi, functionName: 'decimals' })
-        .catch(() => 6)
+        .readContract({ address: token, abi: tip20Abi, functionName: 'decimals' })
+        .catch(() => {
+          throw new Error('Could not read decimals() from the token; check its address and try again.')
+        })
       const data = encodeFunctionData({
         abi: tip20Abi,
         functionName: 'transfer',
-        args: [getAddress(d.recipient), parseUnits(d.amount.trim(), Number(decimals))],
+        args: [getAddress(d.recipient), parseUnits(d.amount, decimals)],
       })
-      return { to: getAddress(d.token), value: 0n, data }
+      return { to: token, value: 0n, data }
     }
 
     if (!isAddress(d.to)) throw new Error('Invalid target address.')
@@ -141,14 +159,13 @@ export function NewTransaction({
       }
     }
 
-    return {
-      to: getAddress(d.to),
-      value: 0n,
-      data: (d.data.trim() || '0x') as Hex,
-    }
+    const data = d.data.trim() || '0x'
+    if (!isBytes(data)) throw new Error('Calldata must be 0x followed by whole bytes of hex.')
+    return { to: getAddress(d.to), value: 0n, data }
   }
 
-  const sign = async () => {
+  /** Queue the drafted transaction: signed by an owner, unsigned from anyone else. */
+  const queue = async () => {
     if (!wallet.walletClient || !wallet.account) return
     setBusy(true)
     setError(null)
@@ -156,31 +173,29 @@ export function NewTransaction({
     try {
       const calls: SafeCall[] = []
       for (const d of drafts) calls.push(await encodeDraft(d))
-      const safeTx: SafeTxParams = buildSafeTx(calls, info.nonce)
+      const safeTx: SafeTxParams = buildSafeTx(calls, chosenNonce())
       const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, safeTx)
-      const typed = safeTxTypedData(wallet.chainId, safe, safeTx)
-      const rawSignature = await wallet.walletClient.signTypedData({
-        account: wallet.account,
-        domain: typed.domain,
-        types: typed.types,
-        primaryType: 'SafeTx',
-        message: typed.message,
-      })
-      const signature = normalizeSignatureV(rawSignature)
-      const owner = await recoverSigner(hash, signature)
-      if (!info.owners.some((o) => o.toLowerCase() === owner.toLowerCase())) {
-        throw new Error(`The signature recovered ${owner}, which is not an owner of this Safe.`)
+      const signatures: PendingTx['signatures'] = {}
+      if (iAmOwner) {
+        const typed = safeTxTypedData(wallet.chainId, safe, safeTx)
+        const rawSignature = await wallet.walletClient.signTypedData({
+          account: wallet.account,
+          domain: typed.domain,
+          types: typed.types,
+          primaryType: 'SafeTx',
+          message: typed.message,
+        })
+        const signature = normalizeSignatureV(rawSignature)
+        const owner = await recoverSigner(hash, signature)
+        if (!info.owners.some((o) => o.toLowerCase() === owner.toLowerCase())) {
+          throw new Error(`The signature recovered ${owner}, which is not an owner of this Safe.`)
+        }
+        signatures[owner.toLowerCase()] = signature
       }
-      onQueued({
-        id: hash,
-        chainId: wallet.chainId,
-        safe,
-        createdAt: Date.now(),
-        tx: serializeTx(safeTx),
-        signatures: { [owner.toLowerCase()]: signature },
-      })
+      onQueued({ id: hash, chainId: wallet.chainId, safe, createdAt: Date.now(), tx: serializeTx(safeTx), signatures })
       setDone(hash)
       setDrafts([blank()])
+      setNonceText('')
       setPreview(null)
     } catch (e) {
       setError(errorMessage(e))
@@ -284,24 +299,41 @@ export function NewTransaction({
         </button>
       </div>
 
+      <div className="grid2">
+        <Field label="Nonce" hint="Empty takes the next free nonce. A transaction runs only after every lower nonce has.">
+          <input
+            className="mono"
+            value={nonceText}
+            onChange={(e) => {
+              setPreview(null)
+              setNonceText(e.target.value)
+            }}
+            placeholder={nextNonce.toString()}
+            inputMode="numeric"
+            disabled={busy}
+          />
+        </Field>
+      </div>
+
       {error && <div style={{ marginTop: 14 }}><Notice kind="err">{error}</Notice></div>}
       {done && (
         <div style={{ marginTop: 14 }}>
           <Notice kind="ok">
-            Signed and queued. SafeTx hash <span className="mono-sm">{done}</span>. Open the{' '}
-            <strong>Queue</strong> tab to collect the remaining signatures and execute.
+            Queued. SafeTx hash <span className="mono-sm">{done}</span>. Open the <strong>Queue</strong> tab
+            to collect the remaining signatures and execute.
           </Notice>
         </div>
       )}
 
       <div className="row" style={{ marginTop: 16 }}>
-        <button className="btn primary" onClick={sign} disabled={busy || !wallet.account}>
-          {busy ? 'Waiting for signature…' : 'Sign & queue'}
+        <button className="btn primary" onClick={queue} disabled={busy || !wallet.account}>
+          {busy ? 'Working…' : iAmOwner ? 'Sign & queue' : 'Queue unsigned'}
         </button>
         <button className="btn ghost" onClick={() => void buildPreview()} disabled={busy}>
           Preview
         </button>
         {!wallet.account && <span className="muted small">Connect a wallet to sign.</span>}
+        {wallet.account && !iAmOwner && <span className="muted small">Not an owner: the owners sign from the Queue.</span>}
       </div>
 
       {preview && <TransactionReview publicClient={wallet.publicClient} tx={preview} abis={abis} />}

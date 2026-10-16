@@ -2,6 +2,7 @@
 import { createPublicClient, createWalletClient, http, hashTypedData, encodeFunctionData, parseAbi } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { foundry } from 'viem/chains'
+import { parseUnits } from '../src/chain'
 import { multiSendCallOnlyAbi, safeAbi, safeProxyFactoryAbi } from '../src/lib/abi'
 import { SAFE_ADDRESSES, SAFE_CREATION_CODE } from '../src/lib/safeArtifacts'
 import {
@@ -9,6 +10,7 @@ import {
   computeSafeTxHash,
   encodeSafeSetup,
   executionSucceeded,
+  nextFreeNonce,
   packMultiSend,
   packSignatures,
   preApprovedSignature,
@@ -174,6 +176,19 @@ check(
     txRisks(batchTx).length === 0 &&
     txRisks({ ...tx, operation: 1 }).length === 1 &&
     txRisks({ ...tx, baseGas: 5n, gasPrice: 1n }).length === 1,
+)
+
+// --- nonces ---
+check('next free nonce skips the ones taken', nextFreeNonce(5n, [5n, 6n, 9n]) === 7n && nextFreeNonce(5n, [7n]) === 5n)
+
+// --- amounts ---
+check(
+  'amounts parse strictly',
+  parseUnits('1.5', 6) === 1500000n &&
+    parseUnits('.5', 6) === 500000n &&
+    parseUnits('1.50', 1) === 15n &&
+    parseUnits('2', 0) === 2n &&
+    ['', '.', '-1', '0x10', '1e3', '1,5', '1.5.9', '1.2345678'].every((v) => throws(() => parseUnits(v, 6))),
 )
 
 // --- owner sorting: pass owners in descending order, expect ascending on-chain ---

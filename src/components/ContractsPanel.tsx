@@ -8,7 +8,7 @@ import { AddressLink, Notice } from './ui'
  * One-time deployment of the Safe v1.3.0 suite through the
  * pre-deployed deterministic CREATE2 factory (salt = 0).
  */
-export function ContractsPanel({ wallet, onDeployed }: { wallet: Wallet; onDeployed?: () => void }) {
+export function ContractsPanel({ wallet }: { wallet: Wallet }) {
   const [status, setStatus] = useState<Record<DeployableKey, boolean> | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,7 +55,6 @@ export function ContractsPanel({ wallet, onDeployed }: { wallet: Wallet; onDeplo
         await refresh()
       }
       await refresh()
-      onDeployed?.()
     } catch (e) {
       setError(errorMessage(e))
     } finally {

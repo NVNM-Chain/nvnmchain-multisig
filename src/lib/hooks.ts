@@ -118,26 +118,3 @@ export function useTokenBalance(publicClient: PublicClient, token: Address | nul
 
   return { balance, loading, refresh }
 }
-
-/** Read the native (placeholder) balance. */
-export function useNativeBalance(publicClient: PublicClient, owner: Address | null) {
-  const [balance, setBalance] = useState<bigint | null>(null)
-
-  const refresh = useCallback(async () => {
-    if (!owner) {
-      setBalance(null)
-      return
-    }
-    try {
-      setBalance(await publicClient.getBalance({ address: owner }))
-    } catch {
-      setBalance(null)
-    }
-  }, [publicClient, owner])
-
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
-
-  return { balance, refresh }
-}

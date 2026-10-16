@@ -40,12 +40,3 @@ export const tip20Abi = parseAbi([
   'function balanceOf(address account) view returns (uint256)',
   'function transfer(address to, uint256 amount) returns (bool)',
 ])
-
-/** ERC-20 fallback (some deployed tokens lack `currency`). */
-export const erc20Abi = parseAbi([
-  'function name() view returns (string)',
-  'function symbol() view returns (string)',
-  'function decimals() view returns (uint8)',
-  'function balanceOf(address account) view returns (uint256)',
-  'function transfer(address to, uint256 amount) returns (bool)',
-])

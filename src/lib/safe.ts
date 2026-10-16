@@ -72,7 +72,7 @@ export function encodeSafeSetup(params: {
   to?: Address
   data?: Hex
 }): Hex {
-  // Safe's `setup` requires owners to be unique and strictly ascending by address.
+  // Sorted, so the address does not depend on the order owners are typed in.
   const byAddress = new Map<string, Address>()
   for (const owner of params.owners) {
     const address = getAddress(owner)
@@ -338,13 +338,4 @@ export function deserializeTx(t: StoredTx): SafeTxParams {
     refundReceiver: t.refundReceiver as Address,
     nonce: BigInt(t.nonce),
   }
-}
-
-/** Short human summary of an encoded call for labels / lists. */
-export function describeCall(call: SafeCall): string {
-  if (call.data === '0x' || call.data === '0x0') {
-    return `send ${call.value.toString()} wei → ${call.to}`
-  }
-  const selector = call.data.slice(0, 10)
-  return `${call.to} ${selector}…`
 }

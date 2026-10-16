@@ -125,7 +125,7 @@ export function SafePicker({
           label="Owners (one address per line or comma-separated)"
           hint={
             ownersText.trim() === '' ? (
-              'Add at least one owner — e.g. the connected wallet. Owners are sorted ascending before encoding (required by Safe).'
+              'Add at least one owner — e.g. the connected wallet. Owners are sorted, so their order does not change the address.'
             ) : owners.invalid.length > 0 ? (
               <span style={{ color: 'var(--red)' }}>Invalid: {owners.invalid.join(', ')}</span>
             ) : (

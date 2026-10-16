@@ -242,6 +242,11 @@ export function safeTxTypedData(chainId: number, safe: Address, tx: SafeTxParams
   } as const
 }
 
+/** True for `0x` followed by whole bytes of hex, exactly `size` of them when given. */
+export function isBytes(value: unknown, size?: number): value is Hex {
+  return typeof value === 'string' && /^0x([0-9a-fA-F]{2})*$/.test(value) && (size === undefined || value.length === 2 + 2 * size)
+}
+
 /** Some wallets return `v = 0/1`; Safe's `ecrecover` expects 27/28. */
 export function normalizeSignatureV(signature: Hex): Hex {
   const v = Number.parseInt(signature.slice(-2), 16)

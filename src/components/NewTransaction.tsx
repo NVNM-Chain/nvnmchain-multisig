@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { encodeFunctionData, getAddress, isAddress, type Address, type Hex, type PublicClient } from 'viem'
-import { errorMessage, FEE_TOKEN, feeTokenSymbol, parseUnits, shortAddress } from '../chain'
+import { errorMessage, FEE_TOKEN, feeTokenSymbol, parseUnits } from '../chain'
 import { tip20Abi } from '../lib/abi'
 import { functionRefs, type AbiEntry } from '../lib/contracts'
 import { emptyParam, type ParamValue } from '../lib/abiparams'
@@ -148,17 +148,6 @@ export function NewTransaction({
     }
   }
 
-  const labelFor = (calls: SafeCall[]) => {
-    if (calls.length === 1) {
-      const d = drafts[0]
-      if (d.kind === 'transfer') return `Transfer ${d.amount} → ${shortAddress(d.recipient, 4)}`
-      const resolved = draftFunction(abis, d)
-      if (resolved) return `${resolved.name}: ${resolved.ref.fn.name}`
-      return `Call ${shortAddress(calls[0].to, 4)}`
-    }
-    return `${calls.length} calls (MultiSend)`
-  }
-
   const sign = async () => {
     if (!wallet.walletClient || !wallet.account) return
     setBusy(true)
@@ -187,7 +176,6 @@ export function NewTransaction({
         chainId: wallet.chainId,
         safe,
         createdAt: Date.now(),
-        label: labelFor(calls),
         tx: serializeTx(safeTx),
         signatures: { [owner.toLowerCase()]: signature },
       })

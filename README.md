@@ -154,4 +154,6 @@ src/
   signatures and share links as sensitive until it runs.
 - A queued transaction is only executable while the Safe's nonce still matches;
   the queue flags stale nonces.
+- `*.github.io` is one origin for all of an account's Pages projects, so they share
+  this app's `localStorage`. Serve it from its own domain to keep the queue private.
 - Always verify the Safe address, target and calldata in your wallet before signing.

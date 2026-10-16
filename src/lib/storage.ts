@@ -1,4 +1,5 @@
-import type { Address, Hex } from 'viem'
+import { getAddress, isAddress, type Address, type Hex } from 'viem'
+import { computeSafeTxHash, deserializeTx, isBytes, serializeTx } from './safe'
 
 /** Serialized (JSON-safe) form of a Safe transaction. */
 export type StoredTx = {
@@ -20,8 +21,6 @@ export type PendingTx = {
   chainId: number
   safe: Address
   createdAt: number
-  /** Human label, e.g. "2 calls · 12.5 nUSD". */
-  label: string
   tx: StoredTx
   /** owner (lowercase) → 65-byte signature. */
   signatures: Record<string, Hex>
@@ -55,8 +54,52 @@ function write<T>(key: string, value: T): void {
   }
 }
 
+const isAddr = (v: unknown) => typeof v === 'string' && isAddress(v)
+const isUint256 = (v: unknown) => typeof v === 'string' && /^\d{1,78}$/.test(v) && BigInt(v) < 1n << 256n
+
+/** Check an untrusted queue entry; its `id` must be the SafeTx hash of its own transaction. */
+export function parsePending(value: unknown): PendingTx {
+  const item = (value ?? {}) as Partial<PendingTx>
+  const raw = (item.tx ?? {}) as Partial<StoredTx>
+  if (
+    !Number.isSafeInteger(item.chainId) ||
+    ![item.safe, raw.to, raw.gasToken, raw.refundReceiver].every(isAddr) ||
+    ![raw.value, raw.safeTxGas, raw.baseGas, raw.gasPrice, raw.nonce].every(isUint256) ||
+    !isBytes(raw.data) ||
+    (raw.operation !== 0 && raw.operation !== 1)
+  ) {
+    throw new Error('Unrecognised transaction payload.')
+  }
+  const { chainId, safe, createdAt, executedTxHash } = item as PendingTx
+  const tx = deserializeTx(raw as StoredTx)
+  const id = computeSafeTxHash(BigInt(chainId), safe, tx)
+  if (String(item.id).toLowerCase() !== id) throw new Error('A transaction does not match its SafeTx hash.')
+  const signatures: Record<string, Hex> = {}
+  for (const [owner, signature] of Object.entries(item.signatures ?? {})) {
+    if (isAddr(owner) && isBytes(signature, 65)) signatures[owner.toLowerCase()] = signature
+  }
+  return {
+    id,
+    chainId,
+    safe: getAddress(safe),
+    createdAt: Number(createdAt) || Date.now(),
+    tx: serializeTx(tx),
+    signatures,
+    executedTxHash: isBytes(executedTxHash, 32) ? executedTxHash : undefined,
+  }
+}
+
 export function loadPending(): PendingTx[] {
-  return read<PendingTx[]>(PENDING_KEY, []).sort((a, b) => b.createdAt - a.createdAt)
+  const stored = read<unknown>(PENDING_KEY, [])
+  const list: PendingTx[] = []
+  for (const item of Array.isArray(stored) ? stored : []) {
+    try {
+      list.push(parsePending(item))
+    } catch {
+      /* drop entries that fail the check */
+    }
+  }
+  return list.sort((a, b) => b.createdAt - a.createdAt)
 }
 
 export function savePending(list: PendingTx[]): void {
@@ -86,27 +129,6 @@ export function removePending(id: Hex): PendingTx[] {
 
 export function markExecuted(id: Hex, txHash: Hex): PendingTx[] {
   const list = loadPending().map((p) => (p.id === id ? { ...p, executedTxHash: txHash } : p))
-  savePending(list)
-  return list
-}
-
-/** Merge a list of pending transactions (from an import), newest signatures win. */
-export function mergePending(imported: PendingTx[]): PendingTx[] {
-  const byId = new Map(loadPending().map((p) => [p.id, p]))
-  for (const item of imported) {
-    const existing = byId.get(item.id)
-    if (!existing) {
-      byId.set(item.id, item)
-    } else {
-      byId.set(item.id, {
-        ...existing,
-        ...item,
-        signatures: { ...item.signatures, ...existing.signatures },
-        executedTxHash: existing.executedTxHash ?? item.executedTxHash,
-      })
-    }
-  }
-  const list = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt)
   savePending(list)
   return list
 }

@@ -1,6 +1,7 @@
 /* End-to-end verification against real Safe v1.3.0 contracts on anvil. */
 import { createPublicClient, createWalletClient, http, hashTypedData, encodeFunctionData, parseAbi } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { foundry } from 'viem/chains'
 import { multiSendCallOnlyAbi, safeAbi, safeProxyFactoryAbi } from '../src/lib/abi'
 import { SAFE_ADDRESSES, SAFE_CREATION_CODE } from '../src/lib/safeArtifacts'
 import {
@@ -26,13 +27,14 @@ import {
   decodeSignatureShare,
   encodeShare,
   encodeSignatureShare,
+  parseShared,
   parseSignatureShare,
   readShareLink,
 } from '../src/lib/share'
-import { importSignatureShare } from '../src/lib/coordinate'
-import { decodeMultiSend, isMultiSendCall } from '../src/lib/decode'
+import { importPending, importSignatureShare } from '../src/lib/coordinate'
+import { decodeMultiSend, isMultiSendCall, txRisks } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
-import { upsertPending, type PendingTx } from '../src/lib/storage'
+import { loadPending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
 
 // localStorage shim so the pending-transaction store works under bun.
 const mem = new Map<string, string>()
@@ -44,13 +46,22 @@ const mem = new Map<string, string>()
 
 const RPC = process.env.RPC ?? 'http://127.0.0.1:8545'
 const account = privateKeyToAccount('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80')
-const pub = createPublicClient({ transport: http(RPC) })
-const wallet = createWalletClient({ account, transport: http(RPC) })
+const pub = createPublicClient({ chain: foundry, transport: http(RPC) })
+const wallet = createWalletClient({ account, chain: foundry, transport: http(RPC) })
 
 let failures = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`)
   if (!ok) failures++
+}
+
+function throws(fn: () => unknown) {
+  try {
+    fn()
+    return false
+  } catch {
+    return true
+  }
 }
 
 async function deploy(data: `0x${string}`) {
@@ -157,6 +168,13 @@ check(
     unpacked[1]!.data === calls[1]!.data &&
     isMultiSendCall(batchTx, SAFE_ADDRESSES.multiSendCallOnly),
 )
+check(
+  'review flags a gas refund and a delegatecall outside MultiSend',
+  txRisks(tx).length === 0 &&
+    txRisks(batchTx).length === 0 &&
+    txRisks({ ...tx, operation: 1 }).length === 1 &&
+    txRisks({ ...tx, baseGas: 5n, gasPrice: 1n }).length === 1,
+)
 
 // --- owner sorting: pass owners in descending order, expect ascending on-chain ---
 const secondOwner = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const
@@ -191,17 +209,33 @@ const exec2 = await wallet.writeContract({
 check('execTransaction with pre-approved signature succeeded', (await pub.waitForTransactionReceipt({ hash: exec2 })).status === 'success')
 
 // --- share link round-trip ---
+const sampleSig = await signTx(safe, tx2)
 const sample: PendingTx = {
   id: computeSafeTxHash(31337n, safe, tx2),
   chainId: 31337,
   safe,
   createdAt: Date.now(),
-  label: 'shared',
   tx: serializeTx(tx2),
-  signatures: { [account.address.toLowerCase()]: preSig },
+  signatures: { [account.address.toLowerCase()]: sampleSig },
 }
 const round = decodeShare(encodeShare([sample]))
-check('share encode/decode round-trip', round.length === 1 && round[0]!.id === sample.id && round[0]!.signatures[account.address.toLowerCase()] === preSig)
+check('share encode/decode round-trip', round.length === 1 && round[0]!.id === sample.id && round[0]!.signatures[account.address.toLowerCase()] === sampleSig)
+
+// --- imports are bound to their SafeTx hash ---
+const forged = { ...sample, tx: serializeTx({ ...tx2, to: secondOwner }) }
+check('import rejects a tx that does not hash to its id', throws(() => decodeShare(encodeShare([forged]))))
+check('import rejects a shapeless entry', throws(() => parseShared([{}])))
+check('import cannot mark a transaction executed', parseShared({ ...sample, executedTxHash: sample.id })[0]!.executedTxHash === undefined)
+savePending([{} as PendingTx, forged, sample])
+check('load drops stored entries that fail the check', loadPending().length === 1 && loadPending()[0]!.id === sample.id)
+savePending([])
+
+// --- imported signatures must recover to the owner they name ---
+const misattributed = { ...sample, signatures: { ...sample.signatures, [secondOwner.toLowerCase()]: sampleSig } }
+check('import keeps only signatures that recover to their owner', Object.keys((await importPending([misattributed]))[0]!.signatures).join() === account.address.toLowerCase())
+const again = await importPending([{ ...sample, createdAt: 1, signatures: {} }])
+check('re-import leaves a queued transaction as it was', again.length === 1 && again[0]!.createdAt === sample.createdAt && again[0]!.signatures[account.address.toLowerCase()] === sampleSig)
+savePending([])
 
 // --- deep link: carries the Safe address (and chain), loads it immediately ---
 ;(globalThis as unknown as { location: unknown }).location = { hash: '', origin: 'https://app.example', pathname: '/', search: '' }
@@ -217,7 +251,7 @@ check('deep link parses safe + chain + txs', txLink.safe?.toLowerCase() === safe
 const tx3: SafeTxParams = { ...tx, data: '0xabcd', nonce: 3n }
 const hash3 = computeSafeTxHash(31337n, safe, tx3)
 const sig3 = await signTx(safe, tx3)
-upsertPending({ id: hash3, chainId: 31337, safe, createdAt: Date.now(), label: 'single sig', tx: serializeTx(tx3), signatures: {} })
+upsertPending({ id: hash3, chainId: 31337, safe, createdAt: Date.now(), tx: serializeTx(tx3), signatures: {} })
 const shareSig = { id: hash3, owner: account.address, signature: sig3 }
 const sigCode = encodeSignatureShare(shareSig)
 check('signature share round-trip', decodeSignatureShare(sigCode).signature === sig3 && parseSignatureShare(buildSignatureUrl(shareSig)).id === hash3)
@@ -226,6 +260,15 @@ check(
   'importSignatureShare adds the single signature',
   imported.owner.toLowerCase() === account.address.toLowerCase() &&
     imported.list.find((p) => p.id === hash3)?.signatures[account.address.toLowerCase()] === sig3,
+)
+const elsewhere = computeSafeTxHash(1n, safe, tx3)
+upsertPending({ id: elsewhere, chainId: 1, safe, createdAt: Date.now(), tx: serializeTx(tx3), signatures: {} })
+check(
+  'a signature is not checked against another network',
+  await importSignatureShare(pub, { ...shareSig, id: elsewhere }).then(
+    () => false,
+    () => true,
+  ),
 )
 
 // --- a mined execTransaction is not always an executed call ---

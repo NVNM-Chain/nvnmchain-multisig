@@ -2,7 +2,7 @@
 import { createPublicClient, createWalletClient, http, hashTypedData, encodeFunctionData, parseAbi } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { foundry } from 'viem/chains'
-import { parseUnits } from '../src/chain'
+import { gasToSend, parseUnits, TX_GAS_CAP } from '../src/chain'
 import { multiSendCallOnlyAbi, safeAbi, safeProxyFactoryAbi } from '../src/lib/abi'
 import { SAFE_ADDRESSES, SAFE_CREATION_CODE } from '../src/lib/safeArtifacts'
 import {
@@ -177,6 +177,9 @@ check(
     txRisks({ ...tx, operation: 1 }).length === 1 &&
     txRisks({ ...tx, baseGas: 5n, gasPrice: 1n }).length === 1,
 )
+
+// --- gas ---
+check('gas to send is a tenth over the estimate, at most the cap', gasToSend(25_200_000n) === 27_720_000n && gasToSend(28_000_000n) === TX_GAS_CAP)
 
 // --- nonces ---
 check('next free nonce skips the ones taken', nextFreeNonce(5n, [5n, 6n, 9n]) === 7n && nextFreeNonce(5n, [7n]) === 5n)

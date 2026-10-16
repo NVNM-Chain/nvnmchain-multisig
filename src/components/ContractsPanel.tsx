@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CREATE2_FACTORY, DEPLOYABLE_ARTIFACTS, deployCalldata, safeSuiteStatus, type DeployableKey } from '../lib/safe'
-import { chainFor, errorMessage } from '../chain'
-import type { Wallet } from '../lib/wallet'
+import { errorMessage } from '../chain'
+import { send, type Wallet } from '../lib/wallet'
 import { AddressLink, Notice } from './ui'
 
 /**
@@ -39,12 +39,7 @@ export function ContractsPanel({ wallet }: { wallet: Wallet }) {
           continue
         }
         setLogs((l) => [...l, `→ deploying ${artifact.label}…`])
-        const hash = await wallet.walletClient.sendTransaction({
-          account: wallet.account,
-          chain: chainFor(wallet.networkKey),
-          to: CREATE2_FACTORY,
-          data: deployCalldata(artifact.key),
-        })
+        const hash = await send(wallet, { to: CREATE2_FACTORY, data: deployCalldata(artifact.key) })
         setLogs((l) => [...l, `   tx ${hash}`])
         const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
         const after = await wallet.publicClient.getCode({ address: artifact.address })

@@ -130,6 +130,15 @@ export function parseUnits(value: string, decimals: number): bigint {
   return BigInt(match[1] + fraction.padEnd(decimals, '0'))
 }
 
+/** Tempo's limit on a transaction's gas. */
+export const TX_GAS_CAP = 30_000_000n
+
+/** A tenth over the node's estimate, at most the cap; a wallet left to itself pads by up to half. */
+export function gasToSend(estimate: bigint): bigint {
+  const padded = (estimate * 11n) / 10n
+  return padded < TX_GAS_CAP ? padded : TX_GAS_CAP
+}
+
 export function errorMessage(e: unknown): string {
   const err = e as { shortMessage?: string; message?: string; details?: string; cause?: { message?: string } }
   return err?.shortMessage ?? err?.message ?? err?.cause?.message ?? String(e)

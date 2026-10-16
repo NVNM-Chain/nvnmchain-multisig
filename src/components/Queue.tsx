@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Address, Hex, PublicClient } from 'viem'
-import { chainFor, errorMessage, shortAddress } from '../chain'
+import { encodeFunctionData, type Address, type Hex, type PublicClient } from 'viem'
+import { errorMessage, shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import {
   deserializeTx,
@@ -17,7 +17,7 @@ import { txRisks } from '../lib/decode'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
 import { markExecuted, mergeSignature, removePending, type PendingTx } from '../lib/storage'
-import type { Wallet } from '../lib/wallet'
+import { send, type Wallet } from '../lib/wallet'
 import { Notice, TxLink } from './ui'
 import { TransactionReview, TxTitle } from './TransactionReview'
 
@@ -133,14 +133,8 @@ function QueuedTxCard({
   const approveOnChain = () =>
     run('approve', async () => {
       if (!wallet.walletClient || !wallet.account) return
-      const hash = await wallet.walletClient.writeContract({
-        account: wallet.account,
-        chain: chainFor(wallet.networkKey),
-        address: safe,
-        abi: safeAbi,
-        functionName: 'approveHash',
-        args: [item.id],
-      })
+      const data = encodeFunctionData({ abi: safeAbi, functionName: 'approveHash', args: [item.id] })
+      const hash = await send(wallet, { to: safe, data })
       const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
       if (receipt.status !== 'success') throw new Error(`approveHash reverted — transaction ${hash}.`)
       await refreshApprovals()
@@ -154,11 +148,7 @@ function QueuedTxCard({
         ...onchain.map((owner) => ({ owner: owner as Address, signature: preApprovedSignature(owner as Address) })),
       ]
       if (entries.length < threshold) throw new Error('Not enough approvals yet.')
-      const packed = packSignatures(entries)
-      const hash = await wallet.walletClient.writeContract({
-        account: wallet.account,
-        chain: chainFor(wallet.networkKey),
-        address: safe,
+      const data = encodeFunctionData({
         abi: safeAbi,
         functionName: 'execTransaction',
         args: [
@@ -171,9 +161,10 @@ function QueuedTxCard({
           tx.gasPrice,
           tx.gasToken,
           tx.refundReceiver,
-          packed,
+          packSignatures(entries),
         ],
       })
+      const hash = await send(wallet, { to: safe, data })
       const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
       onExecuted()
       if (!executionSucceeded(safe, receipt.logs)) {

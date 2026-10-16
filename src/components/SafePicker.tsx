@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { getAddress, isAddress, type Address } from 'viem'
-import { chainFor, errorMessage } from '../chain'
-import type { Wallet } from '../lib/wallet'
+import { encodeFunctionData, getAddress, isAddress, type Address } from 'viem'
+import { errorMessage } from '../chain'
+import { send, type Wallet } from '../lib/wallet'
 import { SAFE_ADDRESSES, encodeSafeSetup, predictSafeAddress } from '../lib/safe'
 import { safeProxyFactoryAbi } from '../lib/abi'
 import type { TrackedSafe } from '../lib/storage'
@@ -80,14 +80,12 @@ export function SafePicker({
       if (existing && existing !== '0x') {
         throw new Error('A Safe already exists at the predicted address. Adjust owners, threshold or salt nonce.')
       }
-      const hash = await wallet.walletClient.writeContract({
-        account: wallet.account,
-        chain: chainFor(wallet.networkKey),
-        address: SAFE_ADDRESSES.safeProxyFactory,
+      const data = encodeFunctionData({
         abi: safeProxyFactoryAbi,
         functionName: 'createProxyWithNonce',
         args: [SAFE_ADDRESSES.safeL2, initializer, BigInt(saltNonce.trim() || '0')],
       })
+      const hash = await send(wallet, { to: SAFE_ADDRESSES.safeProxyFactory, data })
       const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
       const code = await wallet.publicClient.getCode({ address: predicted })
       if (receipt.status !== 'success' || !code || code === '0x') {

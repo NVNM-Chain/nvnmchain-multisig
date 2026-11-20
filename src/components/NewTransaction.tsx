@@ -316,7 +316,15 @@ export function NewTransaction({
         {!wallet.account && <span className="muted small">Connect a wallet to sign.</span>}
       </div>
 
-      {preview && <TransactionReview publicClient={wallet.publicClient} tx={preview} abis={abis} />}
+      {preview && (
+        <TransactionReview
+          publicClient={wallet.publicClient}
+          safe={safe}
+          chainId={wallet.chainId}
+          tx={preview}
+          abis={abis}
+        />
+      )}
     </section>
   )
 }

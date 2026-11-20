@@ -318,7 +318,15 @@ function QueuedTxCard({
         </button>
       </div>
 
-      {showReview && <TransactionReview publicClient={wallet.publicClient} tx={tx} abis={abis} />}
+      {showReview && (
+        <TransactionReview
+          publicClient={wallet.publicClient}
+          safe={safe}
+          chainId={wallet.chainId}
+          tx={tx}
+          abis={abis}
+        />
+      )}
     </div>
   )
 }

@@ -27,7 +27,8 @@ bulletin board; this one does without.
 - **Load a Safe** by address and see its owners, threshold, nonce and fee-token balance.
 - **Build transactions** — TIP-20 transfers or raw contract calls, batched through MultiSend.
 - **Describe contracts with human-readable ABIs** — known interfaces (TIP-20, ERC-20/721/1155, WETH, Multicall3, Safe, NVNM Anchoring, …) ship with the app, and you can add your own; parameter fields are generated from the ABI.
-- **Review before signing or executing** — a decoded view of every call (target, calldata, token amounts, batch contents), plus a pre-sign preview.
+- **Review before signing or executing** — a decoded view of every call (target, calldata, token amounts, batch contents) and the `safeTxHash` you are about to sign, plus a pre-sign preview.
+- **Nonce-safe signing** — the preview is tied to the nonce it was built for. `Sign & queue` re-reads the nonce, and if it moved (or nothing was previewed yet) it rebuilds the preview and asks for a second confirmation instead of signing an unreviewed hash.
 - **Collect approvals without a backend** — off-chain EIP-712 signatures, on-chain `approveHash`, or a single signature sent out-of-band. All three mix and count toward the threshold.
 - **Execute** once the threshold is met — anyone can submit.
 - Light/dark theme that follows your OS.
@@ -153,5 +154,7 @@ src/
   A threshold-signed transaction can be executed by anyone, so treat exported
   signatures and share links as sensitive until it runs.
 - A queued transaction is only executable while the Safe's nonce still matches;
-  the queue flags stale nonces.
+  the queue flags stale nonces and re-checks the on-chain nonce before
+  `execTransaction`. The nonce is part of the `safeTxHash`, so a preview built
+  for another nonce is always rebuilt before it can be signed.
 - Always verify the Safe address, target and calldata in your wallet before signing.

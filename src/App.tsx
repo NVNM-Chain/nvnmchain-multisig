@@ -252,6 +252,7 @@ export default function App() {
                 info={info}
                 abis={abis}
                 onQueued={(item) => setPending(upsertPending(item))}
+                onRefreshInfo={() => void refreshInfo()}
               />
             ) : (
               <section className="card">

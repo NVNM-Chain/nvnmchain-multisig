@@ -163,6 +163,16 @@ function QueuedTxCard({
         entries.push({ owner, signature: preApprovedSignature(owner) })
       }
       if (entries.length < threshold) throw new Error('Not enough approvals yet.')
+      // Approvals are bound to the nonce inside the digest: confirm it is still current
+      // instead of trusting the possibly stale `info` read.
+      const nonce = await wallet.publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' })
+      if (nonce !== tx.nonce) {
+        onExecuted() // refresh the Safe state so the UI shows the new nonce
+        throw new Error(
+          `The Safe nonce is now ${nonce}, but this transaction was built for nonce ${tx.nonce}. ` +
+            'Its approvals can no longer be executed — create the transaction again with the current nonce.',
+        )
+      }
       const packed = packSignatures(entries)
       const hash = await wallet.walletClient.writeContract({
         account: wallet.account,

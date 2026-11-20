@@ -4,7 +4,7 @@ import { shortAddress } from '../chain'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
 import { decodeMultiSend, isMultiSendCall, selectorOf, type PackedCall } from '../lib/decode'
 import { decodeWithAbis, type AbiEntry, type DecodedWithAbi } from '../lib/contracts'
-import { SAFE_ADDRESSES, type SafeTxParams } from '../lib/safe'
+import { computeSafeTxHash, SAFE_ADDRESSES, type SafeTxParams } from '../lib/safe'
 import { AddressLink, CopyButton } from './ui'
 
 function isAddress(value: unknown): value is Address {
@@ -117,13 +117,18 @@ function CallRow({
 /** Decoded, human-readable review of a Safe transaction. */
 export function TransactionReview({
   publicClient,
+  safe,
+  chainId,
   tx,
   abis,
 }: {
   publicClient: PublicClient
+  safe: Address
+  chainId: number
   tx: SafeTxParams
   abis: readonly AbiEntry[]
 }) {
+  const safeTxHash = useMemo(() => computeSafeTxHash(BigInt(chainId), safe, tx), [chainId, safe, tx])
   const batch = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
   const calls = useMemo<PackedCall[]>(() => {
     if (batch) {
@@ -138,9 +143,18 @@ export function TransactionReview({
 
   return (
     <div className="review">
-      <div className="muted small" style={{ marginBottom: 8 }}>
-        {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
+      <div className="row between">
+        <span className="muted small">
+          {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
+        </span>
+        <CopyButton value={safeTxHash} label="copy hash" />
       </div>
+      <dl className="kv" style={{ margin: '8px 0' }}>
+        <dt>safeTxHash</dt>
+        <dd className="mono-sm wrap-any" title={safeTxHash}>
+          {safeTxHash}
+        </dd>
+      </dl>
 
       {calls.map((call, index) => (
         <CallRow key={index} publicClient={publicClient} abis={abis} call={call} index={index} total={calls.length} />

@@ -25,16 +25,29 @@ export const NETWORKS = {
     rpcUrl: 'https://rpc.nvnm.canary.mantrachain.dev',
     explorerUrl: 'https://explorer.nvnm.canary.mantrachain.dev',
     explorerName: 'nvnmchain Explorer',
-    feeTokenSymbol: 'pathUSD',
+    feeTokenSymbol: 'nUSD',
+  },
+  /** A node on this machine, listed by `npm run dev` only; `VITE_LOCAL_RPC` overrides the URL. */
+  local: {
+    key: 'local',
+    name: 'NVNM Local',
+    chainId: 787222,
+    rpcUrl: (import.meta.env.VITE_LOCAL_RPC as string | undefined) ?? 'http://127.0.0.1:8545',
+    explorerUrl: 'http://127.0.0.1:8080',
+    explorerName: 'Local explorer',
+    feeTokenSymbol: 'nUSD',
   },
 } as const
 
 export type NetworkKey = keyof typeof NETWORKS
 
-export const NETWORK_KEYS = Object.keys(NETWORKS) as NetworkKey[]
+export const NETWORK_KEYS = (Object.keys(NETWORKS) as NetworkKey[]).filter(
+  (key) => key !== 'local' || import.meta.env.DEV,
+)
 
-/** The configured network with the given chain id, if any. */
+/** The configured network with the given chain id, if any; the selected one wins a shared id. */
 export function networkKeyForChainId(chainId: number): NetworkKey | null {
+  if (getNetwork().chainId === chainId) return getNetworkKey()
   for (const key of NETWORK_KEYS) {
     if (NETWORKS[key].chainId === chainId) return key
   }
@@ -56,7 +69,7 @@ export function getNetworkKey(): NetworkKey {
   } catch {
     /* storage unavailable */
   }
-  activeKey = stored && stored in NETWORKS ? (stored as NetworkKey) : DEFAULT_NETWORK
+  activeKey = NETWORK_KEYS.includes(stored as NetworkKey) ? (stored as NetworkKey) : DEFAULT_NETWORK
   return activeKey
 }
 
@@ -121,12 +134,22 @@ export function formatUnits(value: bigint | null | undefined, decimals = 6): str
   return viemFormatUnits(value, decimals)
 }
 
-export function parseUnits(value: string, decimals = 6): bigint {
-  const neg = value.trim().startsWith('-')
-  const [whole, frac = ''] = value.trim().replace('-', '').split('.')
-  const padded = (frac + '0'.repeat(decimals)).slice(0, decimals)
-  const n = BigInt((whole || '0') + padded || '0')
-  return neg ? -n : n
+/** Parse a plain decimal amount into base units, rejecting other notations and excess decimals. */
+export function parseUnits(value: string, decimals: number): bigint {
+  const match = /^(\d*)\.?(\d*)$/.exec(value.trim())
+  if (!match || match[1] + match[2] === '') throw new Error(`"${value}" is not a decimal amount.`)
+  const fraction = match[2].replace(/0+$/, '')
+  if (fraction.length > decimals) throw new Error(`"${value}" has more than ${decimals} decimal places.`)
+  return BigInt(match[1] + fraction.padEnd(decimals, '0'))
+}
+
+/** Tempo's limit on a transaction's gas. */
+export const TX_GAS_CAP = 30_000_000n
+
+/** A tenth over the node's estimate, at most the cap; a wallet left to itself pads by up to half. */
+export function gasToSend(estimate: bigint): bigint {
+  const padded = (estimate * 11n) / 10n
+  return padded < TX_GAS_CAP ? padded : TX_GAS_CAP
 }
 
 export function errorMessage(e: unknown): string {

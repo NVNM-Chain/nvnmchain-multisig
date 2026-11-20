@@ -2,9 +2,9 @@ import { useMemo } from 'react'
 import { formatUnits, type Address, type Hex, type PublicClient } from 'viem'
 import { shortAddress } from '../chain'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
-import { decodeMultiSend, isMultiSendCall, selectorOf, type PackedCall } from '../lib/decode'
+import { callsOf, selectorOf, type PackedCall } from '../lib/decode'
 import { decodeWithAbis, type AbiEntry, type DecodedWithAbi } from '../lib/contracts'
-import { SAFE_ADDRESSES, type SafeTxParams } from '../lib/safe'
+import type { SafeTxParams } from '../lib/safe'
 import { AddressLink, CopyButton } from './ui'
 
 function isAddress(value: unknown): value is Address {
@@ -30,23 +30,40 @@ function describe(decoded: DecodedWithAbi | null, selector: Hex, meta: TokenMeta
   if (!decoded) {
     return selector === '0x' ? 'empty call' : `unknown function ${selector}`
   }
-  const symbol = meta ? ` ${meta.symbol}` : ''
-  const decimals = meta?.decimals ?? 6
+  const units = (amount: bigint) =>
+    meta ? `${formatUnits(amount, meta.decimals)} ${meta.symbol}` : `${amount} base units`
   const args = decoded.args
   const name = decoded.fn.name
   if (name === 'transfer') {
     const [to, amount] = args as [Address, bigint]
-    return `Transfer ${formatUnits(amount, decimals)}${symbol} → ${shortAddress(to, 4)}`
+    return `Transfer ${units(amount)} → ${shortAddress(to, 4)}`
   }
   if (name === 'transferFrom') {
     const [from, to, amount] = args as [Address, Address, bigint]
-    return `Transfer ${formatUnits(amount, decimals)}${symbol} · ${shortAddress(from, 4)} → ${shortAddress(to, 4)}`
+    return `Transfer ${units(amount)} · ${shortAddress(from, 4)} → ${shortAddress(to, 4)}`
   }
   if (name === 'approve') {
     const [spender, amount] = args as [Address, bigint]
-    return `Approve ${formatUnits(amount, decimals)}${symbol} → ${shortAddress(spender, 4)}`
+    return `Approve ${units(amount)} → ${shortAddress(spender, 4)}`
   }
   return `${name}(${args.map(formatArg).join(', ')})`
+}
+
+/** Decode a call with the registered ABIs; for a token call, also load the token. */
+function useDecoded(publicClient: PublicClient, abis: readonly AbiEntry[], call: PackedCall | undefined) {
+  const decoded = useMemo(() => (call ? decodeWithAbis(abis, call.to, call.data) : null), [abis, call])
+  const isToken = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name)
+  const meta = useTokenMeta(publicClient, call && isToken ? call.to : null)
+  return { decoded, meta }
+}
+
+/** One-line title of a Safe transaction, read from its calldata. */
+export function TxTitle({ publicClient, abis, tx }: { publicClient: PublicClient; abis: readonly AbiEntry[]; tx: SafeTxParams }) {
+  const { batch, calls } = useMemo(() => callsOf(tx), [tx])
+  const { decoded, meta } = useDecoded(publicClient, abis, batch ? undefined : calls[0])
+  if (batch) return `${calls.length} calls (MultiSend)`
+  if (decoded) return describe(decoded, selectorOf(tx.data), meta)
+  return `${tx.operation === 1 ? 'Delegatecall' : 'Call'} ${shortAddress(tx.to, 4)}`
 }
 
 function CallRow({
@@ -62,10 +79,8 @@ function CallRow({
   index: number
   total: number
 }) {
-  const decoded = useMemo(() => decodeWithAbis(abis, call.to, call.data), [abis, call.to, call.data])
+  const { decoded, meta } = useDecoded(publicClient, abis, call)
   const selector = selectorOf(call.data)
-  const isTokenCall = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name)
-  const meta = useTokenMeta(publicClient, isTokenCall ? call.to : null)
   const summary = useMemo(() => describe(decoded, selector, meta), [decoded, selector, meta])
 
   return (
@@ -124,17 +139,7 @@ export function TransactionReview({
   tx: SafeTxParams
   abis: readonly AbiEntry[]
 }) {
-  const batch = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
-  const calls = useMemo<PackedCall[]>(() => {
-    if (batch) {
-      try {
-        return decodeMultiSend(tx.data)
-      } catch {
-        /* fall through to a single raw call */
-      }
-    }
-    return [{ operation: tx.operation, to: tx.to, value: tx.value, data: tx.data }]
-  }, [batch, tx])
+  const { batch, calls } = useMemo(() => callsOf(tx), [tx])
 
   return (
     <div className="review">

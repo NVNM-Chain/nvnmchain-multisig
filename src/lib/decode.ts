@@ -1,4 +1,6 @@
-import { decodeFunctionData, getAddress, parseAbi, toFunctionSelector, type Address, type Hex } from 'viem'
+import { decodeFunctionData, getAddress, parseAbi, toFunctionSelector, zeroAddress, type Address, type Hex } from 'viem'
+import type { SafeTxParams } from './safe'
+import { SAFE_ADDRESSES } from './safeArtifacts'
 
 /** MultiSendCallOnly / MultiSend batch entry. */
 export type PackedCall = {
@@ -53,4 +55,30 @@ export function isMultiSendCall(tx: { to: Address; operation: number; data: Hex 
     tx.data.length >= 10 &&
     selectorOf(tx.data).toLowerCase() === MULTISEND_SELECTOR.toLowerCase()
   )
+}
+
+/** The calls a Safe transaction makes, with a MultiSendCallOnly batch unpacked. */
+export function callsOf(tx: SafeTxParams): { batch: boolean; calls: PackedCall[] } {
+  if (isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
+    try {
+      return { batch: true, calls: decodeMultiSend(tx.data) }
+    } catch {
+      /* malformed batch: show the raw call */
+    }
+  }
+  return { batch: false, calls: [{ operation: tx.operation, to: tx.to, value: tx.value, data: tx.data }] }
+}
+
+/** Warnings for a delegatecall outside MultiSend and for a gas refund the Safe pays. */
+export function txRisks(tx: SafeTxParams): string[] {
+  const risks: string[] = []
+  if (tx.operation === 1 && !isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
+    risks.push(`Delegatecall: the code at ${tx.to} runs as the Safe and can change its owners or move everything it holds.`)
+  }
+  if (tx.gasPrice > 0n) {
+    const token = tx.gasToken === zeroAddress ? 'the native token' : `token ${tx.gasToken}`
+    const receiver = tx.refundReceiver === zeroAddress ? 'whoever executes' : tx.refundReceiver
+    risks.push(`Gas refund: the Safe pays (gas used + ${tx.baseGas}) × ${tx.gasPrice} of ${token} to ${receiver}.`)
+  }
+  return risks
 }

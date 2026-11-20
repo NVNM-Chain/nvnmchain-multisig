@@ -3,9 +3,10 @@ import type { Address } from 'viem'
 import { getNetwork, getNetworkKey, networkKeyForChainId, setNetworkKey as persistNetwork, errorMessage } from './chain'
 import { useSafeInfo } from './lib/hooks'
 import { allAbis, type AbiEntry } from './lib/contracts'
-import { loadPending, loadTrackedSafes, mergePending, trackSafe, untrackSafe, upsertPending, type PendingTx, type TrackedSafe } from './lib/storage'
+import { nextFreeNonce } from './lib/safe'
+import { loadPending, loadTrackedSafes, trackSafe, untrackSafe, upsertPending, type PendingTx, type TrackedSafe } from './lib/storage'
 import { clearShareFromLocation, readShareLink, type SignatureShare } from './lib/share'
-import { importSignatureShare } from './lib/coordinate'
+import { importPending, importSignatureShare } from './lib/coordinate'
 import { useWallet } from './lib/wallet'
 import { ConnectBar } from './components/ConnectBar'
 import { ContractsPanel } from './components/ContractsPanel'
@@ -37,14 +38,11 @@ export default function App() {
   const linkChainKey = link.chainId ? networkKeyForChainId(link.chainId) : null
   const switchingNetwork = Boolean(linkChainKey && linkChainKey !== wallet.networkKey)
 
-  // Apply the deep link once: switch to the linked network, remember and open the Safe.
+  // Apply the deep link once: switch to the linked network. The Safe opens but is not remembered.
   useEffect(() => {
     if (link.chainId) {
       const key = networkKeyForChainId(link.chainId)
       if (key && key !== getNetworkKey()) persistNetwork(key)
-    }
-    if (link.safe) {
-      setTrackedSafes(trackSafe({ address: link.safe, chainId: link.chainId ?? getNetwork().chainId, addedAt: Date.now() }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -68,9 +66,9 @@ export default function App() {
     setTab('safe')
   }, [])
 
-  const importShared = useCallback(() => {
+  const importShared = useCallback(async () => {
     if (!shared || shared.length === 0) return
-    setPending(mergePending(shared))
+    setPending(await importPending(shared))
     if (!safe) setSafe(shared[0].safe)
     setTab('queue')
     clearShareFromLocation()
@@ -98,15 +96,21 @@ export default function App() {
     }
   }, [sharedSig, wallet.publicClient, safe])
 
+  const remembered = trackedSafes.some(
+    (s) => s.chainId === wallet.chainId && s.address.toLowerCase() === safe?.toLowerCase(),
+  )
+
+  const sigMatches = pending.some((p) => p.id === sharedSig?.id.toLowerCase())
+
   const safePending = pending.filter(
     (p) => safe && p.safe.toLowerCase() === safe.toLowerCase() && p.chainId === wallet.chainId,
   )
-  const openCount = safePending.filter((p) => !p.executedTxHash).length
+  const open = safePending.filter((p) => !p.executedTxHash)
 
   const tabs: { key: Tab; label: string; badge?: number }[] = [
     { key: 'safe', label: safe ? 'Safe' : 'Create / Load' },
     { key: 'new', label: 'New transaction' },
-    { key: 'queue', label: 'Queue', badge: openCount || undefined },
+    { key: 'queue', label: 'Queue', badge: open.length || undefined },
     { key: 'contracts', label: 'Contracts' },
     { key: 'abis', label: 'Interfaces' },
   ]
@@ -142,7 +146,7 @@ export default function App() {
                 {safe ? ' — the Safe is open below.' : '.'}
               </span>
               <div className="row">
-                <button className="btn small primary" onClick={importShared}>
+                <button className="btn small primary" onClick={() => void importShared()}>
                   Import to queue
                 </button>
                 <button className="btn small ghost" onClick={dismissShared}>
@@ -159,11 +163,14 @@ export default function App() {
           <Notice kind="info">
             <div className="row between">
               <span>
-                A single signature for <span className="mono-sm">{sharedSig.owner.slice(0, 10)}…</span> was
-                shared — it matches a transaction in your queue.
+                A single signature from <span className="mono-sm">{sharedSig.owner.slice(0, 10)}…</span> was
+                shared.{' '}
+                {sigMatches
+                  ? 'It is for a transaction in your queue.'
+                  : 'No transaction in your queue matches it; import the transaction first.'}
               </span>
               <div className="row">
-                <button className="btn small primary" onClick={() => void importSharedSig()}>
+                <button className="btn small primary" onClick={() => void importSharedSig()} disabled={!sigMatches}>
                   Add signature
                 </button>
                 <button className="btn small ghost" onClick={dismissShared}>
@@ -230,7 +237,9 @@ export default function App() {
                 safe={safe}
                 info={info}
                 loading={infoLoading}
-                pendingCount={openCount}
+                pendingCount={open.length}
+                remembered={remembered}
+                onRemember={() => handleLoad(safe)}
                 onNewTx={() => setTab('new')}
                 onForget={handleForget}
                 onRefresh={() => void refreshInfo()}
@@ -238,7 +247,7 @@ export default function App() {
             ) : (
               <SafePicker
                 wallet={wallet}
-                trackedSafes={trackedSafes}
+                trackedSafes={trackedSafes.filter((s) => s.chainId === wallet.chainId)}
                 onLoad={handleLoad}
                 onUntrack={handleUntrack}
               />
@@ -251,6 +260,7 @@ export default function App() {
                 safe={safe}
                 info={info}
                 abis={abis}
+                nextNonce={nextFreeNonce(info.nonce, open.map((p) => BigInt(p.tx.nonce)))}
                 onQueued={(item) => setPending(upsertPending(item))}
               />
             ) : (

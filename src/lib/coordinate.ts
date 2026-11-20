@@ -1,14 +1,37 @@
-import type { Address, PublicClient } from 'viem'
+import type { Address, Hex, PublicClient } from 'viem'
 import { safeAbi } from './abi'
 import { normalizeSignatureV, recoverSigner } from './safe'
-import { loadPending, mergeSignature, type PendingTx } from './storage'
+import { loadPending, mergeSignature, savePending, type PendingTx } from './storage'
 import type { SignatureShare } from './share'
+
+/**
+ * Queue imported transactions. A signature must recover to the owner it names;
+ * one already queued only gains signatures.
+ */
+export async function importPending(imported: PendingTx[]): Promise<PendingTx[]> {
+  const byId = new Map(loadPending().map((p) => [p.id, p]))
+  for (const item of imported) {
+    const signatures: Record<string, Hex> = {}
+    for (const [owner, raw] of Object.entries(item.signatures)) {
+      const signature = normalizeSignatureV(raw)
+      const signer = await recoverSigner(item.id, signature).catch(() => null)
+      if (signer?.toLowerCase() === owner) signatures[owner] = signature
+    }
+    const existing = byId.get(item.id)
+    byId.set(
+      item.id,
+      existing ? { ...existing, signatures: { ...signatures, ...existing.signatures } } : { ...item, signatures },
+    )
+  }
+  const list = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt)
+  savePending(list)
+  return list
+}
 
 export type ImportedSignature = {
   list: PendingTx[]
   owner: Address
   safe: Address
-  label: string
 }
 
 /**
@@ -23,6 +46,10 @@ export async function importSignatureShare(
   const item = loadPending().find((p) => p.id.toLowerCase() === share.id.toLowerCase())
   if (!item) {
     throw new Error('No queued transaction matches this signature (SafeTx hash not found).')
+  }
+
+  if (publicClient.chain?.id !== item.chainId) {
+    throw new Error(`This signature is for a transaction on chain ${item.chainId}; switch to that network first.`)
   }
 
   const owners = await publicClient.readContract({
@@ -41,5 +68,5 @@ export async function importSignatureShare(
   }
 
   const list = mergeSignature(item.id, signer, signature)
-  return { list, owner: signer, safe: item.safe, label: item.label }
+  return { list, owner: signer, safe: item.safe }
 }

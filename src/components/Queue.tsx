@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { Address, Hex, PublicClient } from 'viem'
-import { chainFor, errorMessage, shortAddress } from '../chain'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { encodeFunctionData, type Address, type Hex, type PublicClient } from 'viem'
+import { errorMessage, shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import {
-  computeSafeTxHash,
   deserializeTx,
   executionSucceeded,
   normalizeSignatureV,
@@ -12,14 +11,15 @@ import {
   recoverSigner,
   safeTxTypedData,
 } from '../lib/safe'
-import { buildShareUrl, encodeSignatureShare, parseSignatureShare } from '../lib/share'
-import { importSignatureShare } from '../lib/coordinate'
+import { buildShareUrl, encodeSignatureShare, parseShared, parseSignatureShare } from '../lib/share'
+import { importPending, importSignatureShare } from '../lib/coordinate'
+import { txRisks } from '../lib/decode'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
-import { markExecuted, mergePending, mergeSignature, removePending, type PendingTx } from '../lib/storage'
-import type { Wallet } from '../lib/wallet'
+import { markExecuted, mergeSignature, removePending, type PendingTx } from '../lib/storage'
+import { send, type Wallet } from '../lib/wallet'
 import { Notice, TxLink } from './ui'
-import { TransactionReview } from './TransactionReview'
+import { TransactionReview, TxTitle } from './TransactionReview'
 
 /** On-chain `approveHash` status for every owner of a Safe. */
 function useApprovals(publicClient: PublicClient, safe: Address, hash: Hex, owners: Address[]) {
@@ -82,18 +82,18 @@ function QueuedTxCard({
   const [showReview, setShowReview] = useState(false)
   const { approved, refresh: refreshApprovals } = useApprovals(wallet.publicClient, safe, item.id, info.owners)
 
-  const tx = deserializeTx(item.tx)
+  const tx = useMemo(() => deserializeTx(item.tx), [item.tx])
   const threshold = Number(info.threshold)
-  const offchain = Object.keys(item.signatures)
-  const onchain = info.owners
-    .map((o) => o.toLowerCase())
-    .filter((o) => approved[o] && !offchain.includes(o))
+  const ownerKeys = info.owners.map((o) => o.toLowerCase())
+  const offchain = Object.keys(item.signatures).filter((o) => ownerKeys.includes(o))
+  const onchain = ownerKeys.filter((o) => approved[o] && !offchain.includes(o))
   const total = offchain.length + onchain.length
   const executed = Boolean(item.executedTxHash)
-  const nonceOk = tx.nonce === info.nonce
-  const ready = total >= threshold && nonceOk && !executed
+  const stale = tx.nonce < info.nonce
+  const waiting = tx.nonce > info.nonce
+  const ready = total >= threshold && !stale && !waiting && !executed
   const me = wallet.account?.toLowerCase()
-  const iAmOwner = me ? info.owners.some((o) => o.toLowerCase() === me) : false
+  const iAmOwner = me ? ownerKeys.includes(me) : false
   const signed = me ? offchain.includes(me) : false
   const approvedByMe = me ? Boolean(approved[me]) : false
   const mySignature = me ? item.signatures[me] : undefined
@@ -114,8 +114,6 @@ function QueuedTxCard({
   const sign = () =>
     run('sign', async () => {
       if (!wallet.walletClient || !wallet.account) return
-      const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, tx)
-      if (hash.toLowerCase() !== item.id.toLowerCase()) throw new Error('Stored transaction does not match this Safe.')
       const typed = safeTxTypedData(wallet.chainId, safe, tx)
       const raw = await wallet.walletClient.signTypedData({
         account: wallet.account,
@@ -125,7 +123,7 @@ function QueuedTxCard({
         message: typed.message,
       })
       const signature = normalizeSignatureV(raw)
-      const owner = await recoverSigner(hash, signature)
+      const owner = await recoverSigner(item.id, signature)
       if (!info.owners.some((o) => o.toLowerCase() === owner.toLowerCase())) {
         throw new Error(`The signature recovered ${owner}, which is not an owner.`)
       }
@@ -135,14 +133,8 @@ function QueuedTxCard({
   const approveOnChain = () =>
     run('approve', async () => {
       if (!wallet.walletClient || !wallet.account) return
-      const hash = await wallet.walletClient.writeContract({
-        account: wallet.account,
-        chain: chainFor(wallet.networkKey),
-        address: safe,
-        abi: safeAbi,
-        functionName: 'approveHash',
-        args: [item.id],
-      })
+      const data = encodeFunctionData({ abi: safeAbi, functionName: 'approveHash', args: [item.id] })
+      const hash = await send(wallet, { to: safe, data })
       const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
       if (receipt.status !== 'success') throw new Error(`approveHash reverted — transaction ${hash}.`)
       await refreshApprovals()
@@ -151,23 +143,12 @@ function QueuedTxCard({
   const execute = () =>
     run('execute', async () => {
       if (!wallet.walletClient || !wallet.account) return
-      const entries: { owner: Address; signature: Hex }[] = []
-      const seen = new Set<string>()
-      for (const [owner, signature] of Object.entries(item.signatures)) {
-        entries.push({ owner: owner as Address, signature: signature as Hex })
-        seen.add(owner)
-      }
-      for (const owner of info.owners) {
-        const key = owner.toLowerCase()
-        if (seen.has(key) || !approved[key]) continue
-        entries.push({ owner, signature: preApprovedSignature(owner) })
-      }
+      const entries = [
+        ...offchain.map((owner) => ({ owner: owner as Address, signature: item.signatures[owner] })),
+        ...onchain.map((owner) => ({ owner: owner as Address, signature: preApprovedSignature(owner as Address) })),
+      ]
       if (entries.length < threshold) throw new Error('Not enough approvals yet.')
-      const packed = packSignatures(entries)
-      const hash = await wallet.walletClient.writeContract({
-        account: wallet.account,
-        chain: chainFor(wallet.networkKey),
-        address: safe,
+      const data = encodeFunctionData({
         abi: safeAbi,
         functionName: 'execTransaction',
         args: [
@@ -180,9 +161,10 @@ function QueuedTxCard({
           tx.gasPrice,
           tx.gasToken,
           tx.refundReceiver,
-          packed,
+          packSignatures(entries),
         ],
       })
+      const hash = await send(wallet, { to: safe, data })
       const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
       onExecuted()
       if (!executionSucceeded(safe, receipt.logs)) {
@@ -217,13 +199,17 @@ function QueuedTxCard({
   return (
     <div className="tx-call">
       <div className="row between">
-        <strong>{item.label}</strong>
+        <strong>
+          <TxTitle publicClient={wallet.publicClient} abis={abis} tx={tx} />
+        </strong>
         {executed ? (
           <span className="badge ok"><span className="dot ok" /> executed</span>
-        ) : !nonceOk ? (
+        ) : stale ? (
           <span className="badge bad">stale nonce</span>
         ) : ready ? (
           <span className="badge info">ready to execute</span>
+        ) : waiting && total >= threshold ? (
+          <span className="badge warn">approved · waits for nonce {(tx.nonce - 1n).toString()}</span>
         ) : (
           <span className="badge warn">
             {total}/{threshold} approvals
@@ -257,7 +243,14 @@ function QueuedTxCard({
         })}
       </div>
 
-      {!nonceOk && !executed && (
+      {!executed &&
+        txRisks(tx).map((risk) => (
+          <div className="notice err" style={{ marginTop: 10, overflowWrap: 'anywhere' }} key={risk}>
+            {risk}
+          </div>
+        ))}
+
+      {stale && !executed && (
         <div className="notice warn" style={{ marginTop: 10 }}>
           The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>. These approvals
           were made for nonce <span className="mono">{tx.nonce.toString()}</span> and can no longer be
@@ -266,12 +259,12 @@ function QueuedTxCard({
       )}
 
       <div className="row" style={{ marginTop: 12 }}>
-        {!executed && nonceOk && iAmOwner && !signed && (
+        {!executed && !stale && iAmOwner && !signed && (
           <button className="btn small primary" onClick={sign} disabled={busy !== null}>
             {busy === 'sign' ? 'Signing…' : 'Sign (off-chain)'}
           </button>
         )}
-        {!executed && nonceOk && iAmOwner && !approvedByMe && (
+        {!executed && !stale && iAmOwner && !approvedByMe && (
           <button className="btn small" onClick={approveOnChain} disabled={busy !== null}>
             {busy === 'approve' ? 'Approving…' : 'Approve on-chain'}
           </button>
@@ -370,15 +363,14 @@ export function Queue({
     }
   }
 
-  const doImport = () => {
+  const doImport = async () => {
+    setError(null)
     try {
-      const parsed = JSON.parse(importText) as PendingTx[]
-      const list = Array.isArray(parsed) ? parsed : [parsed]
-      onChanged(mergePending(list))
+      onChanged(await importPending(parseShared(JSON.parse(importText))))
       setImportText('')
       setPanel(null)
-    } catch {
-      setError('Could not parse the imported JSON.')
+    } catch (e) {
+      setError(e instanceof SyntaxError ? 'Could not parse the imported JSON.' : errorMessage(e))
     }
   }
 
@@ -437,7 +429,7 @@ export function Queue({
             spellCheck={false}
           />
           <div className="row" style={{ marginTop: 8 }}>
-            <button className="btn small primary" onClick={doImport} disabled={!importText.trim()}>
+            <button className="btn small primary" onClick={() => void doImport()} disabled={!importText.trim()}>
               Merge
             </button>
             <button className="btn small ghost" onClick={() => setPanel(null)}>

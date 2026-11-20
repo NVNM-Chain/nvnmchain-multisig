@@ -1,8 +1,8 @@
-# NVNM Multisig
+# NVNM Multisig UI
 
 **A lightweight, backend-less [Safe](https://safe.global) multisig for NVNM Chain** — a Tempo-compatible L1.
 
-### ▶ [Open the app](https://yihuang.github.io/nvnmchain-multisig/)
+### ▶ [Open the app](https://nvnm-chain.github.io/nvnmchain-multisig)
 
 A *Safe* is an on-chain account owned by a set of addresses: a transaction executes
 once a **threshold** of those owners approve it. This app creates and manages Safes

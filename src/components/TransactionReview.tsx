@@ -1,11 +1,18 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { formatUnits, type Address, type Hex, type PublicClient } from 'viem'
 import { shortAddress } from '../chain'
+import { safeAbi } from '../lib/abi'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
 import { decodeMultiSend, isMultiSendCall, selectorOf, type PackedCall } from '../lib/decode'
 import { decodeWithAbis, type AbiEntry, type DecodedWithAbi } from '../lib/contracts'
-import { computeSafeTxHash, SAFE_ADDRESSES, type SafeTxParams } from '../lib/safe'
-import { AddressLink, CopyButton } from './ui'
+import {
+  computeSafeTxHash,
+  safeDomainSeparator,
+  safeTxStructHash,
+  SAFE_ADDRESSES,
+  type SafeTxParams,
+} from '../lib/safe'
+import { AddressLink, CopyButton, Notice } from './ui'
 
 function isAddress(value: unknown): value is Address {
   return typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value)
@@ -114,6 +121,79 @@ function CallRow({
   )
 }
 
+/** Hashes a signer device shows, read from the Safe itself when it exposes them. */
+function useOnchainHashes(publicClient: PublicClient, safe: Address, tx: SafeTxParams) {
+  const [state, setState] = useState<{ domainSeparator: Hex | null; safeTxHash: Hex | null }>({
+    domainSeparator: null,
+    safeTxHash: null,
+  })
+  const { to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce } = tx
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const [domainSeparator, safeTxHash] = await Promise.all([
+        publicClient
+          .readContract({ address: safe, abi: safeAbi, functionName: 'domainSeparator' })
+          .catch(() => null),
+        publicClient
+          .readContract({
+            address: safe,
+            abi: safeAbi,
+            functionName: 'getTransactionHash',
+            args: [to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce],
+          })
+          .catch(() => null),
+      ])
+      if (!cancelled) setState({ domainSeparator: domainSeparator ?? null, safeTxHash: safeTxHash ?? null })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [publicClient, safe, to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce])
+
+  return state
+}
+
+/** One hash row: value, copy button and an optional on-chain comparison badge. */
+function HashRow({
+  label,
+  note,
+  value,
+  check,
+  match,
+}: {
+  label: string
+  note?: string
+  value: Hex
+  check?: string
+  match?: boolean | null
+}) {
+  return (
+    <>
+      <dt>
+        {label}
+        {note && <div className="muted" style={{ fontSize: 11.5 }}>{note}</div>}
+      </dt>
+      <dd>
+        <span className="mono-sm wrap-any" title={value}>
+          {value}
+        </span>{' '}
+        <CopyButton value={value} />
+        {check && match !== null && match !== undefined && (
+          <span
+            className={`badge ${match ? 'ok' : 'bad'}`}
+            style={{ marginLeft: 6 }}
+            title={match ? `equal to ${check}` : `differs from ${check}`}
+          >
+            {match ? '✓' : '✗'} {check}
+          </span>
+        )}
+      </dd>
+    </>
+  )
+}
+
 /** Decoded, human-readable review of a Safe transaction. */
 export function TransactionReview({
   publicClient,
@@ -128,7 +208,22 @@ export function TransactionReview({
   tx: SafeTxParams
   abis: readonly AbiEntry[]
 }) {
-  const safeTxHash = useMemo(() => computeSafeTxHash(BigInt(chainId), safe, tx), [chainId, safe, tx])
+  const hashes = useMemo(() => {
+    const domainSeparator = safeDomainSeparator(BigInt(chainId), safe)
+    return {
+      domainSeparator,
+      structHash: safeTxStructHash(tx),
+      safeTxHash: computeSafeTxHash(BigInt(chainId), safe, tx),
+    }
+  }, [chainId, safe, tx])
+  const onchain = useOnchainHashes(publicClient, safe, tx)
+  const domainMatches =
+    onchain.domainSeparator === null
+      ? null
+      : onchain.domainSeparator.toLowerCase() === hashes.domainSeparator.toLowerCase()
+  const digestMatches =
+    onchain.safeTxHash === null ? null : onchain.safeTxHash.toLowerCase() === hashes.safeTxHash.toLowerCase()
+
   const batch = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
   const calls = useMemo<PackedCall[]>(() => {
     if (batch) {
@@ -143,18 +238,39 @@ export function TransactionReview({
 
   return (
     <div className="review">
-      <div className="row between">
-        <span className="muted small">
-          {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
-        </span>
-        <CopyButton value={safeTxHash} label="copy hash" />
+      <div className="muted small">
+        {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
       </div>
       <dl className="kv" style={{ margin: '8px 0' }}>
-        <dt>safeTxHash</dt>
-        <dd className="mono-sm wrap-any" title={safeTxHash}>
-          {safeTxHash}
-        </dd>
+        <HashRow
+          label="safeTxHash"
+          note="the EIP-712 digest owners sign"
+          value={hashes.safeTxHash}
+          check="getTransactionHash()"
+          match={digestMatches}
+        />
+        <HashRow
+          label="domainSeparator"
+          note="shown by a Ledger as the domain hash"
+          value={hashes.domainSeparator}
+          check="domainSeparator()"
+          match={domainMatches}
+        />
+        <HashRow label="structHash" note="shown by a Ledger as the message hash" value={hashes.structHash} />
       </dl>
+      <div className="muted small">
+        safeTxHash = keccak256(0x1901 ‖ domainSeparator ‖ structHash). A hardware wallet shows only
+        the domain and message hashes — match them against its screen before approving.
+      </div>
+
+      {digestMatches === false && (
+        <div style={{ marginTop: 10 }}>
+          <Notice kind="err">
+            The local digest does not match <span className="mono-sm">getTransactionHash()</span> on
+            this Safe. Do not sign — the chain id or the Safe address is probably wrong.
+          </Notice>
+        </div>
+      )}
 
       {calls.map((call, index) => (
         <CallRow key={index} publicClient={publicClient} abis={abis} call={call} index={index} total={calls.length} />

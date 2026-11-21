@@ -1,5 +1,5 @@
 /* End-to-end verification against real Safe v1.3.0 contracts on anvil. */
-import { createPublicClient, createWalletClient, http, hashTypedData, encodeFunctionData, parseAbi } from 'viem'
+import { createPublicClient, createWalletClient, http, hashTypedData, hashStruct, encodeFunctionData, keccak256, concat, parseAbi } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { multiSendCallOnlyAbi, safeAbi, safeProxyFactoryAbi } from '../src/lib/abi'
 import { SAFE_ADDRESSES, SAFE_CREATION_CODE } from '../src/lib/safeArtifacts'
@@ -13,6 +13,8 @@ import {
   preApprovedSignature,
   predictSafeAddress,
   recoverSigner,
+  safeDomainSeparator,
+  safeTxStructHash,
   safeTxTypedData,
   serializeTx,
   type SafeCall,
@@ -120,6 +122,21 @@ const onchain = await readHash(safe, tx)
 check('computeSafeTxHash == Safe.getTransactionHash', mine.toLowerCase() === onchain.toLowerCase(), mine)
 const typed = safeTxTypedData(31337, safe, tx)
 check('hashTypedData == computeSafeTxHash', hashTypedData({ domain: typed.domain, types: typed.types, primaryType: 'SafeTx', message: typed.message }).toLowerCase() === mine.toLowerCase())
+
+// The parts a hardware wallet displays: domain hash + message hash.
+const domain = safeDomainSeparator(31337n, safe)
+const structHash = safeTxStructHash(tx)
+const onchainDomain = await pub.readContract({ address: safe, abi: safeAbi, functionName: 'domainSeparator' })
+check('safeDomainSeparator == Safe.domainSeparator()', domain.toLowerCase() === onchainDomain.toLowerCase(), domain)
+check(
+  'safeTxStructHash == hashStruct(SafeTx)',
+  structHash.toLowerCase() === hashStruct({ data: typed.message, types: typed.types, primaryType: 'SafeTx' }).toLowerCase(),
+  structHash,
+)
+check(
+  'safeTxHash = keccak256(0x1901 ‖ domain ‖ structHash)',
+  keccak256(concat(['0x1901', domain, structHash])).toLowerCase() === mine.toLowerCase(),
+)
 const signature = await signTx(safe, tx)
 check('recoverSigner == signer', (await recoverSigner(mine, signature)).toLowerCase() === account.address.toLowerCase())
 const executed = await exec(safe, tx, signature)

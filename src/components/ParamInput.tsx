@@ -21,12 +21,14 @@ export function ParamInput({
   onChange,
   label,
   depth = 0,
+  disabled = false,
 }: {
   param: AbiParameter
   value: ParamValue
   onChange: (value: ParamValue) => void
   label: string
   depth?: number
+  disabled?: boolean
 }) {
   const error = paramError(param, value, label)
   const hint = error ? <span style={{ color: 'var(--red)' }}>{error}</span> : null
@@ -46,6 +48,7 @@ export function ParamInput({
             <button
               type="button"
               className="btn small ghost"
+              disabled={disabled}
               onClick={() => onChange({ kind: 'array', items: [...items, emptyParam(array.inner)] })}
             >
               + item
@@ -66,6 +69,7 @@ export function ParamInput({
                 }}
                 label={`${elementName} [${index}]`}
                 depth={depth + 1}
+                disabled={disabled}
               />
             </div>
             {!fixed && (
@@ -74,6 +78,7 @@ export function ParamInput({
                 className="copy"
                 style={{ marginTop: 18 }}
                 title="Remove"
+                disabled={disabled}
                 onClick={() => onChange({ kind: 'array', items: items.filter((_, i) => i !== index) })}
               >
                 ✕
@@ -107,6 +112,7 @@ export function ParamInput({
             }}
             label={paramLabel(component, `${label}.${index}`)}
             depth={depth + 1}
+            disabled={disabled}
           />
         ))}
         {hint && <div className="small" style={{ marginTop: 4 }}>{hint}</div>}
@@ -121,7 +127,11 @@ export function ParamInput({
         {label} <span className="muted">· {param.type}</span>
       </label>
       {param.type === 'bool' ? (
-        <select value={primitive === 'true' ? 'true' : 'false'} onChange={(e) => onChange({ kind: 'primitive', value: e.target.value })}>
+        <select
+          value={primitive === 'true' ? 'true' : 'false'}
+          disabled={disabled}
+          onChange={(e) => onChange({ kind: 'primitive', value: e.target.value })}
+        >
           <option value="false">false</option>
           <option value="true">true</option>
         </select>
@@ -131,6 +141,7 @@ export function ParamInput({
           value={primitive}
           placeholder={paramPlaceholder(param)}
           spellCheck={false}
+          disabled={disabled}
           onChange={(e) => onChange({ kind: 'primitive', value: e.target.value })}
         />
       )}

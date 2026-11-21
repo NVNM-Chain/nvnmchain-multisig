@@ -324,6 +324,7 @@ export function NewTransaction({
               value={draft}
               onChange={(patch) => update(draft.id, patch)}
               abis={abis}
+              disabled={busy}
             />
           )}
         </div>

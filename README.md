@@ -107,7 +107,7 @@ npm run dev      # http://localhost:5174
 npm run build    # type-check + production bundle in dist/
 ```
 
-Push to `main` deploys to GitHub Pages via [`.github/workflows/pages.yml`](.github/workflows/pages.yml); [`ci.yml`](.github/workflows/ci.yml) type-checks and builds, runs the ABI checks, then runs the Safe integration checks against anvil. Enable **Settings → Pages → Source: GitHub Actions** once (the workflow can also do it). The base path is derived from the repo name — set `BASE_PATH=/…/` to override.
+Pushing a tag such as `v0.1.0` (`git tag v0.1.0 && git push origin v0.1.0`) deploys to GitHub Pages via [`.github/workflows/pages.yml`](.github/workflows/pages.yml) — plain `main` pushes are validated but never published, so the live site always corresponds to a tagged release. [`ci.yml`](.github/workflows/ci.yml) type-checks and builds every push and PR, runs the ABI checks, then runs the Safe integration checks against anvil. Enable **Settings → Pages → Source: GitHub Actions** once (the workflow can also do it). The base path is derived from the repo name — set `BASE_PATH=/…/` to override.
 
 ### Verify
 

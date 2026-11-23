@@ -154,13 +154,8 @@ src/
   A threshold-signed transaction can be executed by anyone, so treat exported
   signatures and share links as sensitive until it runs.
 - A queued transaction is only executable while the Safe's nonce still matches;
-  the queue separates a **stale** nonce (behind the Safe — can never execute, offers
-  a one-click *Rebase to the current nonce* that keeps the calls and drops the
-  signatures) from a **future** one (ahead of the Safe — pre-signable). Signing,
-  on-chain approval and execution each re-read the nonce from the Safe rather
-  than trusting the cached value, so a tx that died in another tab cannot cost
-  gas or a wallet confirmation. The nonce is part of the `safeTxHash`, so a
-  preview built for another nonce is always rebuilt before it can be signed.
+  the queue flags stale nonces, offers a rebase onto the next free nonce, and
+  re-reads the Safe's nonce before signing, approving or executing.
 - `*.github.io` is one origin for all of an account's Pages projects, so they share
   this app's `localStorage`. Serve it from its own domain to keep the queue private.
 - Always verify the Safe address, target and calldata in your wallet before signing.

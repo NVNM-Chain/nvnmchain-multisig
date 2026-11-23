@@ -1,5 +1,5 @@
 import { getAddress, isAddress, type Address, type Hex } from 'viem'
-import { computeSafeTxHash, deserializeTx, isBytes, isUint256, serializeTx } from './safe'
+import { computeSafeTxHash, deserializeTx, isBytes, isUint256, nextFreeNonce, serializeTx } from './safe'
 
 /** Serialized (JSON-safe) form of a Safe transaction. */
 export type StoredTx = {
@@ -122,6 +122,26 @@ export function mergeSignature(id: Hex, owner: Address, signature: Hex): Pending
 
 export function removePending(id: Hex): PendingTx[] {
   const list = loadPending().filter((p) => p.id !== id)
+  savePending(list)
+  return list
+}
+
+/**
+ * Replace a dead transaction with its calls at the first nonce from `live` that no open
+ * transaction holds, unsigned. An open copy left by an earlier rebase is kept instead.
+ */
+export function rebasePending(item: PendingTx, live: bigint): PendingTx[] {
+  const tx = deserializeTx(item.tx)
+  const hashAt = (nonce: bigint) => computeSafeTxHash(BigInt(item.chainId), item.safe, { ...tx, nonce })
+  const list = loadPending().filter((p) => p.id !== item.id)
+  const open = list.filter(
+    (p) => !p.executedTxHash && p.chainId === item.chainId && p.safe.toLowerCase() === item.safe.toLowerCase(),
+  )
+  if (!open.some((p) => BigInt(p.tx.nonce) >= live && p.id === hashAt(BigInt(p.tx.nonce)))) {
+    const nonce = nextFreeNonce(live, open.map((p) => BigInt(p.tx.nonce)))
+    const { chainId, safe } = item
+    list.unshift({ id: hashAt(nonce), chainId, safe, createdAt: Date.now(), tx: serializeTx({ ...tx, nonce }), signatures: {} })
+  }
   savePending(list)
   return list
 }

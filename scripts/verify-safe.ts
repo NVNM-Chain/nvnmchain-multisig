@@ -38,7 +38,7 @@ import {
 import { assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
 import { decodeMultiSend, isMultiSendCall, txRisks } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
-import { loadPending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
+import { loadPending, rebasePending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
 
 // localStorage shim so the pending-transaction store works under bun.
 const mem = new Map<string, string>()
@@ -309,23 +309,40 @@ check(
   ),
 )
 
-// --- rebasing twice (or re-adding the same rebased tx) must keep its signatures ---
-// A dead transaction is re-queued for the current nonce with empty signatures; a
-// merge for the same digest has to preserve signatures already collected for it.
-const rebased: PendingTx = {
-  id: hash3,
+// --- queueing the same transaction again must keep its signatures ---
+const queued = (t: SafeTxParams, signatures: PendingTx['signatures'] = {}): PendingTx => ({
+  id: computeSafeTxHash(31337n, safe, t),
   chainId: 31337,
   safe,
   createdAt: Date.now(),
-  tx: serializeTx(tx3),
-  signatures: {},
-}
-const merged = await importPending([rebased])
+  tx: serializeTx(t),
+  signatures,
+})
+const merged = await importPending([queued(tx3)])
 check(
   'importPending keeps signatures of an existing id',
   merged.filter((p) => p.id === hash3).length === 1 &&
     merged.find((p) => p.id === hash3)?.signatures[account.address.toLowerCase()] === sig3,
 )
+
+// --- rebasing a dead transaction ---
+const dead = queued({ ...tx3, nonce: 1n })
+const other = queued({ ...tx3, data: '0x1234', nonce: 5n })
+const tx6 = { ...tx3, nonce: 6n }
+const sig6 = await signTx(safe, tx6)
+const copy = queued(tx6, { [account.address.toLowerCase()]: sig6 })
+savePending([dead, other])
+check(
+  'rebase takes the next free nonce and drops the dead transaction',
+  rebasePending(dead, 5n).map((p) => p.id).sort().join() === [other.id, copy.id].sort().join(),
+)
+savePending([dead, copy])
+const kept = rebasePending(dead, 5n)
+check(
+  'rebasing again keeps the earlier copy and its signatures',
+  kept.length === 1 && kept[0]!.id === copy.id && kept[0]!.signatures[account.address.toLowerCase()] === sig6,
+)
+savePending([])
 
 // --- a mined execTransaction is not always an executed call ---
 const failing: SafeTxParams = { ...tx, to: factory, data: '0xdeadbeef', safeTxGas: 100000n, nonce: 3n }

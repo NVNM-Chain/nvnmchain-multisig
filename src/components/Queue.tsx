@@ -3,7 +3,6 @@ import { encodeFunctionData, type Address, type Hex, type PublicClient } from 'v
 import { errorMessage, shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import {
-  computeSafeTxHash,
   deserializeTx,
   executionSucceeded,
   normalizeSignatureV,
@@ -11,14 +10,13 @@ import {
   preApprovedSignature,
   recoverSigner,
   safeTxTypedData,
-  serializeTx,
 } from '../lib/safe'
 import { buildShareUrl, encodeSignatureShare, parseShared, parseSignatureShare } from '../lib/share'
 import { assertSafeTxHash, importPending, importSignatureShare } from '../lib/coordinate'
 import { txRisks } from '../lib/decode'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
-import { markExecuted, mergeSignature, removePending, type PendingTx } from '../lib/storage'
+import { markExecuted, mergeSignature, rebasePending, removePending, type PendingTx } from '../lib/storage'
 import { send, type Wallet } from '../lib/wallet'
 import { Notice, TxLink } from './ui'
 import { TransactionReview, TxTitle } from './TransactionReview'
@@ -126,7 +124,7 @@ function QueuedTxCard({
     onExecuted() // refresh the Safe state so the card flips to "stale nonce"
     throw new Error(
       `${action} cancelled: the Safe nonce is now ${nonce}, but this transaction was built for nonce ` +
-        `${tx.nonce}. It can never execute — rebase it to the current nonce and collect signatures again.`,
+        `${tx.nonce}. It can never execute — rebase it to the next free nonce and collect signatures again.`,
     )
   }
 
@@ -179,7 +177,7 @@ function QueuedTxCard({
         onExecuted() // refresh the Safe state so the UI shows the new nonce
         throw new Error(
           `The Safe nonce is now ${nonce}, but this transaction was built for nonce ${tx.nonce}. ` +
-            'Its approvals can no longer be executed — rebase it to the current nonce.',
+            'Its approvals can no longer be executed — rebase it to the next free nonce.',
         )
       }
       const data = encodeFunctionData({
@@ -209,9 +207,8 @@ function QueuedTxCard({
     })
 
   /**
-   * Rebuild a dead transaction with the live nonce, keeping its calls but dropping
-   * the approvals that can no longer be used. Local only — no wallet interaction —
-   * so any viewer can prepare the replacement.
+   * Rebase a dead transaction with `rebasePending`. Local only — no wallet
+   * interaction — so any viewer can prepare the replacement.
    */
   const rebase = () =>
     run('rebase', async () => {
@@ -226,16 +223,7 @@ function QueuedTxCard({
         onExecuted()
         throw new Error('The Safe nonce already matches this transaction — nothing to rebase.')
       }
-      const next = { ...tx, nonce }
-      const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, next)
-      // Merge (not replace) so an owner who already rebased — or signed the
-      // replacement — keeps their signatures: the new digest is unique, so no
-      // signature from the dead one can leak in.
-      onChanged(
-        await importPending([
-          { id: hash, chainId: wallet.chainId, safe, createdAt: Date.now(), tx: serializeTx(next), signatures: {} },
-        ]),
-      )
+      onChanged(rebasePending(item, nonce))
       onExecuted()
     })
 
@@ -321,11 +309,11 @@ function QueuedTxCard({
         <div className="notice warn" style={{ marginTop: 10 }}>
           The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>; this transaction
           was built for nonce <span className="mono">{tx.nonce.toString()}</span>, so it can never be
-          executed and its approvals are dead. Rebase it to reuse the same calls with the current
+          executed and its approvals are dead. Rebase it to move the same calls to the next free
           nonce — the old signatures do not carry over.
           <div className="row" style={{ marginTop: 8 }}>
             <button className="btn small" onClick={rebase} disabled={busy !== null}>
-              {busy === 'rebase' ? 'Rebasing…' : 'Rebase to the current nonce'}
+              {busy === 'rebase' ? 'Rebasing…' : 'Rebase to the next free nonce'}
             </button>
           </div>
         </div>

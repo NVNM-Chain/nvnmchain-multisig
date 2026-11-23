@@ -123,11 +123,25 @@ function CallRow({
 
 /** Hashes a signer device shows, read from the Safe itself when it exposes them. */
 function useOnchainHashes(publicClient: PublicClient, safe: Address, tx: SafeTxParams) {
-  const [state, setState] = useState<{ domainSeparator: Hex | null; safeTxHash: Hex | null }>({
-    domainSeparator: null,
-    safeTxHash: null,
-  })
+  const [result, setResult] = useState<
+    { key: string; domainSeparator: Hex | null; safeTxHash: Hex | null } | null
+  >(null)
   const { to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce } = tx
+  // Results are tagged with the transaction they were read for, so a stale read from
+  // the previous preview is never compared against the new local digest.
+  const key = [
+    safe,
+    to,
+    value.toString(),
+    data,
+    operation,
+    safeTxGas.toString(),
+    baseGas.toString(),
+    gasPrice.toString(),
+    gasToken,
+    refundReceiver,
+    nonce.toString(),
+  ].join('|')
 
   useEffect(() => {
     let cancelled = false
@@ -145,14 +159,16 @@ function useOnchainHashes(publicClient: PublicClient, safe: Address, tx: SafeTxP
           })
           .catch(() => null),
       ])
-      if (!cancelled) setState({ domainSeparator: domainSeparator ?? null, safeTxHash: safeTxHash ?? null })
+      if (!cancelled) {
+        setResult({ key, domainSeparator: domainSeparator ?? null, safeTxHash: safeTxHash ?? null })
+      }
     })()
     return () => {
       cancelled = true
     }
-  }, [publicClient, safe, to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce])
+  }, [publicClient, safe, key, to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce])
 
-  return state
+  return result && result.key === key ? result : null
 }
 
 /** One hash row: value, copy button and an optional on-chain comparison badge. */
@@ -218,11 +234,13 @@ export function TransactionReview({
   }, [chainId, safe, tx])
   const onchain = useOnchainHashes(publicClient, safe, tx)
   const domainMatches =
-    onchain.domainSeparator === null
+    !onchain || onchain.domainSeparator === null
       ? null
       : onchain.domainSeparator.toLowerCase() === hashes.domainSeparator.toLowerCase()
   const digestMatches =
-    onchain.safeTxHash === null ? null : onchain.safeTxHash.toLowerCase() === hashes.safeTxHash.toLowerCase()
+    !onchain || onchain.safeTxHash === null
+      ? null
+      : onchain.safeTxHash.toLowerCase() === hashes.safeTxHash.toLowerCase()
 
   const batch = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
   const calls = useMemo<PackedCall[]>(() => {

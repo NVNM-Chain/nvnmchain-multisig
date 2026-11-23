@@ -137,6 +137,7 @@ export function NewTransaction({
     try {
       const nonce = chosenNonce()
       const { tx } = await buildTx(nonce)
+      computeSafeTxHash(BigInt(wallet.chainId), safe, tx)
       setPreview(tx)
       // Keep the header nonce in step with the chain while we are here.
       onRefreshInfo()

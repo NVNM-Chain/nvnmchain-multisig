@@ -11,12 +11,13 @@ import {
   preApprovedSignature,
   recoverSigner,
   safeTxTypedData,
+  serializeTx,
 } from '../lib/safe'
 import { buildShareUrl, encodeSignatureShare, parseSignatureShare } from '../lib/share'
 import { importSignatureShare } from '../lib/coordinate'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
-import { markExecuted, mergePending, mergeSignature, removePending, type PendingTx } from '../lib/storage'
+import { markExecuted, mergePending, mergeSignature, removePending, upsertPending, type PendingTx } from '../lib/storage'
 import type { Wallet } from '../lib/wallet'
 import { Notice, TxLink } from './ui'
 import { TransactionReview } from './TransactionReview'
@@ -76,7 +77,7 @@ function QueuedTxCard({
   onExecuted: () => void
   onError: (message: string | null) => void
 }) {
-  const [busy, setBusy] = useState<'sign' | 'approve' | 'execute' | null>(null)
+  const [busy, setBusy] = useState<'sign' | 'approve' | 'execute' | 'rebase' | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   const [sigCopied, setSigCopied] = useState(false)
   const [showReview, setShowReview] = useState(false)
@@ -90,8 +91,12 @@ function QueuedTxCard({
     .filter((o) => approved[o] && !offchain.includes(o))
   const total = offchain.length + onchain.length
   const executed = Boolean(item.executedTxHash)
-  const nonceOk = tx.nonce === info.nonce
-  const ready = total >= threshold && nonceOk && !executed
+  // The Safe increments its nonce in order, so a transaction is either at the
+  // current nonce (executable now), behind it (dead — it can never execute) or
+  // ahead of it (pre-signable, executable once the Safe catches up).
+  const nonceState: 'current' | 'dead' | 'future' =
+    tx.nonce === info.nonce ? 'current' : tx.nonce < info.nonce ? 'dead' : 'future'
+  const ready = total >= threshold && nonceState === 'current' && !executed
   const me = wallet.account?.toLowerCase()
   const iAmOwner = me ? info.owners.some((o) => o.toLowerCase() === me) : false
   const signed = me ? offchain.includes(me) : false
@@ -99,7 +104,7 @@ function QueuedTxCard({
   const mySignature = me ? item.signatures[me] : undefined
   const dataBytes = tx.data === '0x' ? 0 : (tx.data.length - 2) / 2
 
-  const run = async (kind: 'sign' | 'approve' | 'execute', fn: () => Promise<void>) => {
+  const run = async (kind: 'sign' | 'approve' | 'execute' | 'rebase', fn: () => Promise<void>) => {
     setBusy(kind)
     onError(null)
     try {
@@ -111,9 +116,25 @@ function QueuedTxCard({
     }
   }
 
+  /**
+   * `info` can lag behind the chain, and a signature on an already-consumed
+   * nonce can never be executed. Read the nonce right before asking the wallet
+   * to sign or to spend gas on `approveHash`.
+   */
+  const assertNotDead = async (action: string) => {
+    const nonce = await wallet.publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' })
+    if (nonce <= tx.nonce) return
+    onExecuted() // refresh the Safe state so the card flips to "dead nonce"
+    throw new Error(
+      `${action} cancelled: the Safe nonce is now ${nonce}, but this transaction was built for nonce ` +
+        `${tx.nonce}. It can never execute — rebase it to the current nonce and collect signatures again.`,
+    )
+  }
+
   const sign = () =>
     run('sign', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      await assertNotDead('Signing')
       const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, tx)
       if (hash.toLowerCase() !== item.id.toLowerCase()) throw new Error('Stored transaction does not match this Safe.')
       const typed = safeTxTypedData(wallet.chainId, safe, tx)
@@ -135,6 +156,8 @@ function QueuedTxCard({
   const approveOnChain = () =>
     run('approve', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      // `approveHash` costs gas and its approval could never be used on a dead nonce.
+      await assertNotDead('On-chain approval')
       const hash = await wallet.walletClient.writeContract({
         account: wallet.account,
         chain: chainFor(wallet.networkKey),
@@ -170,7 +193,7 @@ function QueuedTxCard({
         onExecuted() // refresh the Safe state so the UI shows the new nonce
         throw new Error(
           `The Safe nonce is now ${nonce}, but this transaction was built for nonce ${tx.nonce}. ` +
-            'Its approvals can no longer be executed — create the transaction again with the current nonce.',
+            'Its approvals can no longer be executed — rebase it to the current nonce.',
         )
       }
       const packed = packSignatures(entries)
@@ -202,6 +225,40 @@ function QueuedTxCard({
       onChanged(markExecuted(item.id, hash))
     })
 
+  /**
+   * Rebuild a dead transaction with the live nonce, keeping its calls but
+   * dropping the approvals that can no longer be used. Local only — no wallet
+   * interaction — so any viewer can prepare the replacement.
+   */
+  const rebase = () =>
+    run('rebase', async () => {
+      const nonce = await wallet.publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' })
+      if (nonce < tx.nonce) {
+        onExecuted()
+        throw new Error(
+          `The Safe nonce is ${nonce}; this transaction is ahead of it and still valid — nothing to rebase.`,
+        )
+      }
+      if (nonce === tx.nonce) {
+        onExecuted()
+        throw new Error('The Safe nonce already matches this transaction — nothing to rebase.')
+      }
+      const next = { ...tx, nonce }
+      const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, next)
+      onChanged(
+        upsertPending({
+          id: hash,
+          chainId: wallet.chainId,
+          safe,
+          createdAt: Date.now(),
+          label: item.label,
+          tx: serializeTx(next),
+          signatures: {},
+        }),
+      )
+      onExecuted()
+    })
+
   const copyShare = async () => {
     try {
       await navigator.clipboard.writeText(buildShareUrl([item]))
@@ -230,8 +287,14 @@ function QueuedTxCard({
         <strong>{item.label}</strong>
         {executed ? (
           <span className="badge ok"><span className="dot ok" /> executed</span>
-        ) : !nonceOk ? (
-          <span className="badge bad">stale nonce</span>
+        ) : nonceState === 'dead' ? (
+          <span className="badge bad" title="The Safe has moved past this nonce — it can never execute.">
+            dead nonce
+          </span>
+        ) : nonceState === 'future' ? (
+          <span className="badge warn" title="Ahead of the Safe nonce — signable now, executable later.">
+            nonce ahead · {total}/{threshold}
+          </span>
         ) : ready ? (
           <span className="badge info">ready to execute</span>
         ) : (
@@ -267,21 +330,35 @@ function QueuedTxCard({
         })}
       </div>
 
-      {!nonceOk && !executed && (
+      {!executed && nonceState === 'dead' && (
         <div className="notice warn" style={{ marginTop: 10 }}>
-          The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>. These approvals
-          were made for nonce <span className="mono">{tx.nonce.toString()}</span> and can no longer be
-          executed.
+          The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>; this transaction
+          was built for nonce <span className="mono">{tx.nonce.toString()}</span>, so it can never be
+          executed and its approvals are dead. Rebase it to reuse the same calls with the current
+          nonce — the old signatures do not carry over.
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn small" onClick={rebase} disabled={busy !== null}>
+              {busy === 'rebase' ? 'Rebasing…' : 'Rebase to the current nonce'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!executed && nonceState === 'future' && (
+        <div className="notice info" style={{ marginTop: 10 }}>
+          This transaction is for nonce <span className="mono">{tx.nonce.toString()}</span>, ahead of
+          the current nonce <span className="mono">{info.nonce.toString()}</span>. It can be signed
+          now and becomes executable once the Safe reaches that nonce.
         </div>
       )}
 
       <div className="row" style={{ marginTop: 12 }}>
-        {!executed && nonceOk && iAmOwner && !signed && (
+        {!executed && nonceState !== 'dead' && iAmOwner && !signed && (
           <button className="btn small primary" onClick={sign} disabled={busy !== null}>
             {busy === 'sign' ? 'Signing…' : 'Sign (off-chain)'}
           </button>
         )}
-        {!executed && nonceOk && iAmOwner && !approvedByMe && (
+        {!executed && nonceState !== 'dead' && iAmOwner && !approvedByMe && (
           <button className="btn small" onClick={approveOnChain} disabled={busy !== null}>
             {busy === 'approve' ? 'Approving…' : 'Approve on-chain'}
           </button>

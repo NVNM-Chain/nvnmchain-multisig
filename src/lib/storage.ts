@@ -1,5 +1,5 @@
 import { getAddress, isAddress, type Address, type Hex } from 'viem'
-import { computeSafeTxHash, deserializeTx, isBytes, serializeTx } from './safe'
+import { computeSafeTxHash, deserializeTx, isBytes, isUint256, serializeTx } from './safe'
 
 /** Serialized (JSON-safe) form of a Safe transaction. */
 export type StoredTx = {
@@ -55,7 +55,6 @@ function write<T>(key: string, value: T): void {
 }
 
 const isAddr = (v: unknown) => typeof v === 'string' && isAddress(v)
-const isUint256 = (v: unknown) => typeof v === 'string' && /^\d{1,78}$/.test(v) && BigInt(v) < 1n << 256n
 
 /** Check an untrusted queue entry; its `id` must be the SafeTx hash of its own transaction. */
 export function parsePending(value: unknown): PendingTx {

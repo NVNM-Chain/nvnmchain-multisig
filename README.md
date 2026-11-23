@@ -28,7 +28,7 @@ bulletin board; this one does without.
 - **Build transactions** — TIP-20 transfers or raw contract calls, batched through MultiSend.
 - **Describe contracts with human-readable ABIs** — known interfaces (TIP-20, ERC-20/721/1155, WETH, Multicall3, Safe, NVNM Anchoring, …) ship with the app, and you can add your own; parameter fields are generated from the ABI.
 - **Review before signing or executing** — a decoded view of every call (target, calldata, token amounts, batch contents) and the hashes you are about to sign, plus a pre-sign preview. Signing is refused when the Safe's `getTransactionHash()` disagrees.
-- **Nonce-safe signing** — the preview is tied to the nonce it was built for. `Sign & queue` re-reads the nonce, and if it moved (or nothing was previewed yet) it rebuilds the preview and asks for a second confirmation instead of signing an unreviewed hash.
+- **Sign only what you reviewed** — `Sign & queue` signs the previewed hash. If nothing was previewed, or the nonce or calls changed, it shows the new hash and asks again.
 - **Collect approvals without a backend** — off-chain EIP-712 signatures, on-chain `approveHash`, or a single signature sent out-of-band. All three mix and count toward the threshold.
 - **Execute** once the threshold is met — anyone can submit.
 - Light/dark theme that follows your OS.

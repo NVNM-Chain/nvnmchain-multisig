@@ -257,6 +257,9 @@ export function isBytes(value: unknown, size?: number): value is Hex {
   return typeof value === 'string' && /^0x([0-9a-fA-F]{2})*$/.test(value) && (size === undefined || value.length === 2 + 2 * size)
 }
 
+/** True for a decimal string that fits a uint256. */
+export const isUint256 = (v: unknown) => typeof v === 'string' && /^\d{1,78}$/.test(v) && BigInt(v) < 1n << 256n
+
 /** Some wallets return `v = 0/1`; Safe's `ecrecover` expects 27/28. */
 export function normalizeSignatureV(signature: Hex): Hex {
   const v = Number.parseInt(signature.slice(-2), 16)

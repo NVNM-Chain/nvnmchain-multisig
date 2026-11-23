@@ -35,7 +35,7 @@ import {
   parseSignatureShare,
   readShareLink,
 } from '../src/lib/share'
-import { importPending, importSignatureShare } from '../src/lib/coordinate'
+import { assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
 import { decodeMultiSend, isMultiSendCall, txRisks } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
 import { loadPending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
@@ -150,6 +150,9 @@ check(
   'safeTxHash = keccak256(0x1901 ‖ domain ‖ structHash)',
   keccak256(concat(['0x1901', domain, structHash])).toLowerCase() === mine.toLowerCase(),
 )
+const passes = (p: Promise<void>) => p.then(() => true, () => false)
+check('assertSafeTxHash accepts the hash the Safe computes', await passes(assertSafeTxHash(pub, safe, tx, mine)))
+check('assertSafeTxHash refuses another chain id', !(await passes(assertSafeTxHash(pub, safe, tx, computeSafeTxHash(1n, safe, tx)))))
 const signature = await signTx(safe, tx)
 check('recoverSigner == signer', (await recoverSigner(mine, signature)).toLowerCase() === account.address.toLowerCase())
 const executed = await exec(safe, tx, signature)

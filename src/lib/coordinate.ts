@@ -1,8 +1,26 @@
 import type { Address, Hex, PublicClient } from 'viem'
 import { safeAbi } from './abi'
-import { normalizeSignatureV, recoverSigner } from './safe'
+import { normalizeSignatureV, recoverSigner, type SafeTxParams } from './safe'
 import { loadPending, mergeSignature, savePending, type PendingTx } from './storage'
 import type { SignatureShare } from './share'
+
+/** The SafeTx hash as the Safe itself computes it. */
+export function readSafeTxHash(publicClient: PublicClient, safe: Address, tx: SafeTxParams): Promise<Hex> {
+  return publicClient.readContract({
+    address: safe,
+    abi: safeAbi,
+    functionName: 'getTransactionHash',
+    args: [tx.to, tx.value, tx.data, tx.operation, tx.safeTxGas, tx.baseGas, tx.gasPrice, tx.gasToken, tx.refundReceiver, tx.nonce],
+  })
+}
+
+/** Refuse to sign or approve a hash the Safe computes differently, as with a wrong chain id. */
+export async function assertSafeTxHash(publicClient: PublicClient, safe: Address, tx: SafeTxParams, hash: Hex) {
+  const onchain = await readSafeTxHash(publicClient, safe, tx)
+  if (onchain.toLowerCase() !== hash.toLowerCase()) {
+    throw new Error(`This Safe computes SafeTx hash ${onchain}, not ${hash}; check the network's chain id.`)
+  }
+}
 
 /**
  * Queue imported transactions. A signature must recover to the owner it names;

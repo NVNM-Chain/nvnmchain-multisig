@@ -15,6 +15,7 @@ import {
   type SafeCall,
   type SafeTxParams,
 } from '../lib/safe'
+import { assertSafeTxHash } from '../lib/coordinate'
 import { useTokenMeta, type SafeInfo } from '../lib/hooks'
 import type { PendingTx } from '../lib/storage'
 import type { Wallet } from '../lib/wallet'
@@ -225,7 +226,7 @@ export function NewTransaction({
         )
         return
       }
-
+      await assertSafeTxHash(wallet.publicClient, safe, safeTx, hash)
       const signatures: PendingTx['signatures'] = {}
       if (iAmOwner) {
         const typed = safeTxTypedData(wallet.chainId, safe, safeTx)

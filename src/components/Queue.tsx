@@ -14,7 +14,7 @@ import {
   serializeTx,
 } from '../lib/safe'
 import { buildShareUrl, encodeSignatureShare, parseShared, parseSignatureShare } from '../lib/share'
-import { importPending, importSignatureShare } from '../lib/coordinate'
+import { assertSafeTxHash, importPending, importSignatureShare } from '../lib/coordinate'
 import { txRisks } from '../lib/decode'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
@@ -134,6 +134,7 @@ function QueuedTxCard({
     run('sign', async () => {
       if (!wallet.walletClient || !wallet.account) return
       await assertNotDead('Signing')
+      await assertSafeTxHash(wallet.publicClient, safe, tx, item.id)
       const typed = safeTxTypedData(wallet.chainId, safe, tx)
       const raw = await wallet.walletClient.signTypedData({
         account: wallet.account,
@@ -155,6 +156,7 @@ function QueuedTxCard({
       if (!wallet.walletClient || !wallet.account) return
       // `approveHash` costs gas and its approval could never be used on a dead nonce.
       await assertNotDead('On-chain approval')
+      await assertSafeTxHash(wallet.publicClient, safe, tx, item.id)
       const data = encodeFunctionData({ abi: safeAbi, functionName: 'approveHash', args: [item.id] })
       const hash = await send(wallet, { to: safe, data })
       const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })

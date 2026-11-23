@@ -27,8 +27,8 @@ bulletin board; this one does without.
 - **Load a Safe** by address and see its owners, threshold, nonce and fee-token balance.
 - **Build transactions** — TIP-20 transfers or raw contract calls, batched through MultiSend.
 - **Describe contracts with human-readable ABIs** — known interfaces (TIP-20, ERC-20/721/1155, WETH, Multicall3, Safe, NVNM Anchoring, …) ship with the app, and you can add your own; parameter fields are generated from the ABI.
-- **Review before signing or executing** — a decoded view of every call (target, calldata, token amounts, batch contents) and the `safeTxHash` you are about to sign, plus a pre-sign preview. The preview also shows the EIP-712 **domain separator** and **SafeTx struct hash** that a Ledger displays, cross-checked against the Safe's `domainSeparator()` and `getTransactionHash()`.
-- **Nonce-safe signing** — the preview is tied to the nonce it was built for. `Sign & queue` re-reads the nonce, and if it moved (or nothing was previewed yet) it rebuilds the preview and asks for a second confirmation instead of signing an unreviewed hash.
+- **Review before signing or executing** — a decoded view of every call (target, calldata, token amounts, batch contents) and the hashes you are about to sign, plus a pre-sign preview. Signing is refused when the Safe's `getTransactionHash()` disagrees.
+- **Sign only what you reviewed** — `Sign & queue` signs the previewed hash. If nothing was previewed, or the nonce or calls changed, it shows the new hash and asks again.
 - **Collect approvals without a backend** — off-chain EIP-712 signatures, on-chain `approveHash`, or a single signature sent out-of-band. All three mix and count toward the threshold.
 - **Execute** once the threshold is met — anyone can submit.
 - Light/dark theme that follows your OS.
@@ -139,7 +139,7 @@ src/
     contracts.ts         human-readable ABI registry (built-ins + user, localStorage)
     abiparams.ts         ABI parameter model: derive fields, validate, coerce to args
     share.ts             share links, signature codes, deep links
-    coordinate.ts        import a single out-of-band owner signature
+    coordinate.ts        queue imports, signature shares, the Safe's own SafeTx hash
     storage.ts           localStorage: queued transactions + tracked Safes
     abi.ts, hooks.ts, wallet.ts, theme.ts
   components/            ConnectBar, ContractsPanel, SafePicker, SafeDashboard,
@@ -154,17 +154,10 @@ src/
   A threshold-signed transaction can be executed by anyone, so treat exported
   signatures and share links as sensitive until it runs.
 - A queued transaction is only executable while the Safe's nonce still matches;
-  the queue separates a **stale** nonce (behind the Safe — can never execute, offers
-  a one-click *Rebase to the current nonce* that keeps the calls and drops the
-  signatures) from a **future** one (ahead of the Safe — pre-signable). Signing,
-  on-chain approval and execution each re-read the nonce from the Safe rather
-  than trusting the cached value, so a tx that died in another tab cannot cost
-  gas or a wallet confirmation. The nonce is part of the `safeTxHash`, so a
-  preview built for another nonce is always rebuilt before it can be signed.
+  the queue flags stale nonces, offers a rebase onto the next free nonce, and
+  re-reads the Safe's nonce before signing, approving or executing.
 - `*.github.io` is one origin for all of an account's Pages projects, so they share
   this app's `localStorage`. Serve it from its own domain to keep the queue private.
 - Always verify the Safe address, target and calldata in your wallet before signing.
-- A Ledger shows the EIP-712 **domain hash** and **message hash** instead of the
-  final digest. The review shows both (`domainSeparator`, `structHash`) so they
-  can be matched against the device, and flags it when the locally computed
-  digest disagrees with the Safe's `getTransactionHash()`.
+- A Ledger shows a domain hash and a message hash, not the `safeTxHash`: match them
+  against the review's `domainSeparator` and `structHash` before approving.

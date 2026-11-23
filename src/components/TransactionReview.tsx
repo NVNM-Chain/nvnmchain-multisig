@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { formatUnits, type Address, type Hex, type PublicClient } from 'viem'
 import { shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
+import { readSafeTxHash } from '../lib/coordinate'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
 import { callsOf, selectorOf, type PackedCall } from '../lib/decode'
 import { decodeWithAbis, type AbiEntry, type DecodedWithAbi } from '../lib/contracts'
@@ -67,27 +68,9 @@ export function TxTitle({ publicClient, abis, tx }: { publicClient: PublicClient
   return `${tx.operation === 1 ? 'Delegatecall' : 'Call'} ${shortAddress(tx.to, 4)}`
 }
 
-/** Hashes a signer device shows, read from the Safe itself when it exposes them. */
-function useOnchainHashes(publicClient: PublicClient, safe: Address, tx: SafeTxParams) {
-  const [result, setResult] = useState<
-    { key: string; domainSeparator: Hex | null; safeTxHash: Hex | null } | null
-  >(null)
-  const { to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce } = tx
-  // Results are tagged with the transaction they were read for, so a stale read from
-  // the previous preview is never compared against the new local digest.
-  const key = [
-    safe,
-    to,
-    value.toString(),
-    data,
-    operation,
-    safeTxGas.toString(),
-    baseGas.toString(),
-    gasPrice.toString(),
-    gasToken,
-    refundReceiver,
-    nonce.toString(),
-  ].join('|')
+/** The Safe's own `domainSeparator()` and `getTransactionHash()` for `tx`, keyed by its local hash `digest`; null until read. */
+function useOnchainHashes(publicClient: PublicClient, safe: Address, tx: SafeTxParams, digest: Hex) {
+  const [result, setResult] = useState<{ digest: Hex; domainSeparator: Hex | null; safeTxHash: Hex | null } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -96,25 +79,16 @@ function useOnchainHashes(publicClient: PublicClient, safe: Address, tx: SafeTxP
         publicClient
           .readContract({ address: safe, abi: safeAbi, functionName: 'domainSeparator' })
           .catch(() => null),
-        publicClient
-          .readContract({
-            address: safe,
-            abi: safeAbi,
-            functionName: 'getTransactionHash',
-            args: [to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce],
-          })
-          .catch(() => null),
+        readSafeTxHash(publicClient, safe, tx).catch(() => null),
       ])
-      if (!cancelled) {
-        setResult({ key, domainSeparator: domainSeparator ?? null, safeTxHash: safeTxHash ?? null })
-      }
+      if (!cancelled) setResult({ digest, domainSeparator: domainSeparator ?? null, safeTxHash: safeTxHash ?? null })
     })()
     return () => {
       cancelled = true
     }
-  }, [publicClient, safe, key, to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce])
+  }, [publicClient, safe, digest])
 
-  return result && result.key === key ? result : null
+  return result?.digest === digest ? result : null
 }
 
 /** One hash row: value, copy button and an optional on-chain comparison badge. */
@@ -241,7 +215,7 @@ export function TransactionReview({
       safeTxHash: computeSafeTxHash(BigInt(chainId), safe, tx),
     }
   }, [chainId, safe, tx])
-  const onchain = useOnchainHashes(publicClient, safe, tx)
+  const onchain = useOnchainHashes(publicClient, safe, tx, hashes.safeTxHash)
   const domainMatches =
     !onchain || onchain.domainSeparator === null
       ? null
@@ -276,16 +250,12 @@ export function TransactionReview({
         />
         <HashRow label="structHash" note="shown by a Ledger as the message hash" value={hashes.structHash} />
       </dl>
-      <div className="muted small">
-        safeTxHash = keccak256(0x1901 ‖ domainSeparator ‖ structHash). A hardware wallet shows only
-        the domain and message hashes — match them against its screen before approving.
-      </div>
 
       {digestMatches === false && (
         <div style={{ marginTop: 10 }}>
           <Notice kind="err">
             The local digest does not match <span className="mono-sm">getTransactionHash()</span> on
-            this Safe. Do not sign — the chain id or the Safe address is probably wrong.
+            this Safe, so signing is refused: the network's chain id is probably wrong.
           </Notice>
         </div>
       )}

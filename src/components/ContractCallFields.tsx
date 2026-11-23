@@ -73,15 +73,17 @@ function InterfaceSelect({
   abis,
   value,
   onChange,
+  disabled,
 }: {
   abis: readonly AbiEntry[]
   value: string
   onChange: (id: string) => void
+  disabled?: boolean
 }) {
   const builtins = abis.filter((entry) => entry.source === 'builtin')
   const user = abis.filter((entry) => entry.source === 'user')
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} style={{ width: '100%' }}>
+    <select value={value} onChange={(e) => onChange(e.target.value)} style={{ width: '100%' }} disabled={disabled}>
       <option value="auto">Auto-detect from address</option>
       <option value="custom">Custom method (type a signature)…</option>
       <option value="raw">Raw calldata</option>
@@ -115,10 +117,12 @@ export function ContractCallFields({
   value,
   onChange,
   abis,
+  disabled = false,
 }: {
   value: ContractCallValue
   onChange: (patch: Partial<ContractCallValue>) => void
   abis: readonly AbiEntry[]
+  disabled?: boolean
 }) {
   const interf = useMemo(
     () => interfaceFor(abis, value),
@@ -158,12 +162,14 @@ export function ContractCallFields({
         }
         placeholder="0x…"
         spellCheck={false}
+        disabled={disabled}
       />
 
       <label className="lbl">Interface</label>
       <InterfaceSelect
         abis={abis}
         value={value.abiId}
+        disabled={disabled}
         onChange={(abiId) => onChange({ abiId, functionSig: '', params: [] })}
       />
 
@@ -176,6 +182,7 @@ export function ContractCallFields({
             onChange={(e) => onChange({ customMethod: e.target.value })}
             placeholder="transfer(address,uint256)"
             spellCheck={false}
+            disabled={disabled}
           />
           <div className="muted small" style={{ marginTop: 6 }}>
             {interf.error ? (
@@ -216,6 +223,7 @@ export function ContractCallFields({
                   onChange({ functionSig: e.target.value, params: next ? emptyParams(next.fn.inputs) : [] })
                 }}
                 style={{ width: '100%' }}
+                disabled={disabled}
               >
                 {functions.map((ref) => (
                   <option key={ref.signature} value={ref.signature}>
@@ -240,6 +248,7 @@ export function ContractCallFields({
                   param={input}
                   value={values[index]}
                   label={input.name || `arg${index}`}
+                  disabled={disabled}
                   onChange={(next) => {
                     const copy = [...values]
                     copy[index] = next
@@ -266,6 +275,7 @@ export function ContractCallFields({
             onChange={(e) => onChange({ data: e.target.value })}
             placeholder="0x"
             spellCheck={false}
+            disabled={disabled}
           />
         </>
       )}

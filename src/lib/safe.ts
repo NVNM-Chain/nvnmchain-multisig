@@ -179,9 +179,9 @@ export function safeDomainSeparator(chainId: bigint, safe: Address): Hex {
   )
 }
 
-/** Compute the SafeTx hash (the digest owners sign). */
-export function computeSafeTxHash(chainId: bigint, safe: Address, tx: SafeTxParams): Hex {
-  const structHash = keccak256(
+/** EIP-712 struct hash of the `SafeTx` message (what a signer device calls the message hash). */
+export function safeTxStructHash(tx: SafeTxParams): Hex {
+  return keccak256(
     encodeAbiParameters(
       [
         { type: 'bytes32' },
@@ -211,7 +211,11 @@ export function computeSafeTxHash(chainId: bigint, safe: Address, tx: SafeTxPara
       ],
     ),
   )
-  return keccak256(concat(['0x1901', safeDomainSeparator(chainId, safe), structHash]))
+}
+
+/** Compute the SafeTx hash (the digest owners sign). */
+export function computeSafeTxHash(chainId: bigint, safe: Address, tx: SafeTxParams): Hex {
+  return keccak256(concat(['0x1901', safeDomainSeparator(chainId, safe), safeTxStructHash(tx)]))
 }
 
 /** EIP-712 typed data for `eth_signTypedData_v4`. */

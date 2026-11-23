@@ -3,6 +3,7 @@ import { encodeFunctionData, type Address, type Hex, type PublicClient } from 'v
 import { errorMessage, shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import {
+  computeSafeTxHash,
   deserializeTx,
   executionSucceeded,
   normalizeSignatureV,
@@ -10,6 +11,7 @@ import {
   preApprovedSignature,
   recoverSigner,
   safeTxTypedData,
+  serializeTx,
 } from '../lib/safe'
 import { buildShareUrl, encodeSignatureShare, parseShared, parseSignatureShare } from '../lib/share'
 import { importPending, importSignatureShare } from '../lib/coordinate'
@@ -76,7 +78,7 @@ function QueuedTxCard({
   onExecuted: () => void
   onError: (message: string | null) => void
 }) {
-  const [busy, setBusy] = useState<'sign' | 'approve' | 'execute' | null>(null)
+  const [busy, setBusy] = useState<'sign' | 'approve' | 'execute' | 'rebase' | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   const [sigCopied, setSigCopied] = useState(false)
   const [showReview, setShowReview] = useState(false)
@@ -89,6 +91,8 @@ function QueuedTxCard({
   const onchain = ownerKeys.filter((o) => approved[o] && !offchain.includes(o))
   const total = offchain.length + onchain.length
   const executed = Boolean(item.executedTxHash)
+  // The Safe consumes nonces in order: behind it the transaction is dead, ahead of
+  // it the approvals are valid but execution has to wait for the lower nonces.
   const stale = tx.nonce < info.nonce
   const waiting = tx.nonce > info.nonce
   const ready = total >= threshold && !stale && !waiting && !executed
@@ -99,7 +103,7 @@ function QueuedTxCard({
   const mySignature = me ? item.signatures[me] : undefined
   const dataBytes = tx.data === '0x' ? 0 : (tx.data.length - 2) / 2
 
-  const run = async (kind: 'sign' | 'approve' | 'execute', fn: () => Promise<void>) => {
+  const run = async (kind: 'sign' | 'approve' | 'execute' | 'rebase', fn: () => Promise<void>) => {
     setBusy(kind)
     onError(null)
     try {
@@ -111,9 +115,25 @@ function QueuedTxCard({
     }
   }
 
+  /**
+   * `info` can lag behind the chain, and a signature on an already-consumed nonce
+   * can never be executed. Read the nonce right before asking the wallet to sign
+   * or to spend gas on `approveHash`.
+   */
+  const assertNotDead = async (action: string) => {
+    const nonce = await wallet.publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' })
+    if (nonce <= tx.nonce) return
+    onExecuted() // refresh the Safe state so the card flips to "stale nonce"
+    throw new Error(
+      `${action} cancelled: the Safe nonce is now ${nonce}, but this transaction was built for nonce ` +
+        `${tx.nonce}. It can never execute — rebase it to the current nonce and collect signatures again.`,
+    )
+  }
+
   const sign = () =>
     run('sign', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      await assertNotDead('Signing')
       const typed = safeTxTypedData(wallet.chainId, safe, tx)
       const raw = await wallet.walletClient.signTypedData({
         account: wallet.account,
@@ -133,6 +153,8 @@ function QueuedTxCard({
   const approveOnChain = () =>
     run('approve', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      // `approveHash` costs gas and its approval could never be used on a dead nonce.
+      await assertNotDead('On-chain approval')
       const data = encodeFunctionData({ abi: safeAbi, functionName: 'approveHash', args: [item.id] })
       const hash = await send(wallet, { to: safe, data })
       const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
@@ -148,6 +170,16 @@ function QueuedTxCard({
         ...onchain.map((owner) => ({ owner: owner as Address, signature: preApprovedSignature(owner as Address) })),
       ]
       if (entries.length < threshold) throw new Error('Not enough approvals yet.')
+      // Approvals are bound to the nonce inside the digest: confirm it is still current
+      // instead of trusting the possibly stale `info` read.
+      const nonce = await wallet.publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' })
+      if (nonce !== tx.nonce) {
+        onExecuted() // refresh the Safe state so the UI shows the new nonce
+        throw new Error(
+          `The Safe nonce is now ${nonce}, but this transaction was built for nonce ${tx.nonce}. ` +
+            'Its approvals can no longer be executed — rebase it to the current nonce.',
+        )
+      }
       const data = encodeFunctionData({
         abi: safeAbi,
         functionName: 'execTransaction',
@@ -172,6 +204,37 @@ function QueuedTxCard({
         throw new Error(`${what} — transaction ${hash}.`)
       }
       onChanged(markExecuted(item.id, hash))
+    })
+
+  /**
+   * Rebuild a dead transaction with the live nonce, keeping its calls but dropping
+   * the approvals that can no longer be used. Local only — no wallet interaction —
+   * so any viewer can prepare the replacement.
+   */
+  const rebase = () =>
+    run('rebase', async () => {
+      const nonce = await wallet.publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' })
+      if (nonce < tx.nonce) {
+        onExecuted()
+        throw new Error(
+          `The Safe nonce is ${nonce}; this transaction is ahead of it and still valid — nothing to rebase.`,
+        )
+      }
+      if (nonce === tx.nonce) {
+        onExecuted()
+        throw new Error('The Safe nonce already matches this transaction — nothing to rebase.')
+      }
+      const next = { ...tx, nonce }
+      const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, next)
+      // Merge (not replace) so an owner who already rebased — or signed the
+      // replacement — keeps their signatures: the new digest is unique, so no
+      // signature from the dead one can leak in.
+      onChanged(
+        await importPending([
+          { id: hash, chainId: wallet.chainId, safe, createdAt: Date.now(), tx: serializeTx(next), signatures: {} },
+        ]),
+      )
+      onExecuted()
     })
 
   const copyShare = async () => {
@@ -205,7 +268,9 @@ function QueuedTxCard({
         {executed ? (
           <span className="badge ok"><span className="dot ok" /> executed</span>
         ) : stale ? (
-          <span className="badge bad">stale nonce</span>
+          <span className="badge bad" title="The Safe has moved past this nonce — it can never execute.">
+            stale nonce
+          </span>
         ) : ready ? (
           <span className="badge info">ready to execute</span>
         ) : waiting && total >= threshold ? (
@@ -252,9 +317,23 @@ function QueuedTxCard({
 
       {stale && !executed && (
         <div className="notice warn" style={{ marginTop: 10 }}>
-          The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>. These approvals
-          were made for nonce <span className="mono">{tx.nonce.toString()}</span> and can no longer be
-          executed.
+          The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>; this transaction
+          was built for nonce <span className="mono">{tx.nonce.toString()}</span>, so it can never be
+          executed and its approvals are dead. Rebase it to reuse the same calls with the current
+          nonce — the old signatures do not carry over.
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn small" onClick={rebase} disabled={busy !== null}>
+              {busy === 'rebase' ? 'Rebasing…' : 'Rebase to the current nonce'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {waiting && !executed && (
+        <div className="notice info" style={{ marginTop: 10 }}>
+          This transaction is for nonce <span className="mono">{tx.nonce.toString()}</span>, ahead of
+          the current nonce <span className="mono">{info.nonce.toString()}</span>. It can be signed
+          now and becomes executable once the Safe reaches that nonce.
         </div>
       )}
 
@@ -311,7 +390,15 @@ function QueuedTxCard({
         </button>
       </div>
 
-      {showReview && <TransactionReview publicClient={wallet.publicClient} tx={tx} abis={abis} />}
+      {showReview && (
+        <TransactionReview
+          publicClient={wallet.publicClient}
+          safe={safe}
+          chainId={wallet.chainId}
+          tx={tx}
+          abis={abis}
+        />
+      )}
     </div>
   )
 }

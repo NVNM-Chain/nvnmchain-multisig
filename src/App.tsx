@@ -4,7 +4,7 @@ import { getNetwork, getNetworkKey, networkKeyForChainId, setNetworkKey as persi
 import { useSafeInfo } from './lib/hooks'
 import { allAbis, type AbiEntry } from './lib/contracts'
 import { nextFreeNonce } from './lib/safe'
-import { loadPending, loadTrackedSafes, trackSafe, untrackSafe, upsertPending, type PendingTx, type TrackedSafe } from './lib/storage'
+import { loadPending, loadTrackedSafes, trackSafe, untrackSafe, type PendingTx, type TrackedSafe } from './lib/storage'
 import { clearShareFromLocation, readShareLink, type SignatureShare } from './lib/share'
 import { importPending, importSignatureShare } from './lib/coordinate'
 import { useWallet } from './lib/wallet'
@@ -261,7 +261,8 @@ export default function App() {
                 info={info}
                 abis={abis}
                 nextNonce={nextFreeNonce(info.nonce, open.map((p) => BigInt(p.tx.nonce)))}
-                onQueued={(item) => setPending(upsertPending(item))}
+                onQueued={(item) => void importPending([item]).then(setPending)}
+                onRefreshInfo={() => void refreshInfo()}
               />
             ) : (
               <section className="card">

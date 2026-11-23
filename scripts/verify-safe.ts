@@ -1,5 +1,5 @@
 /* End-to-end verification against real Safe v1.3.0 contracts on anvil. */
-import { createPublicClient, createWalletClient, http, hashTypedData, encodeFunctionData, parseAbi } from 'viem'
+import { createPublicClient, createWalletClient, http, hashTypedData, hashStruct, encodeFunctionData, keccak256, concat, parseAbi } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { foundry } from 'viem/chains'
 import { gasToSend, parseUnits, TX_GAS_CAP } from '../src/chain'
@@ -16,6 +16,8 @@ import {
   preApprovedSignature,
   predictSafeAddress,
   recoverSigner,
+  safeDomainSeparator,
+  safeTxStructHash,
   safeTxTypedData,
   serializeTx,
   type SafeCall,
@@ -133,6 +135,21 @@ const onchain = await readHash(safe, tx)
 check('computeSafeTxHash == Safe.getTransactionHash', mine.toLowerCase() === onchain.toLowerCase(), mine)
 const typed = safeTxTypedData(31337, safe, tx)
 check('hashTypedData == computeSafeTxHash', hashTypedData({ domain: typed.domain, types: typed.types, primaryType: 'SafeTx', message: typed.message }).toLowerCase() === mine.toLowerCase())
+
+// The parts a hardware wallet displays: domain hash + message hash.
+const domain = safeDomainSeparator(31337n, safe)
+const structHash = safeTxStructHash(tx)
+const onchainDomain = await pub.readContract({ address: safe, abi: safeAbi, functionName: 'domainSeparator' })
+check('safeDomainSeparator == Safe.domainSeparator()', domain.toLowerCase() === onchainDomain.toLowerCase(), domain)
+check(
+  'safeTxStructHash == hashStruct(SafeTx)',
+  structHash.toLowerCase() === hashStruct({ data: typed.message, types: typed.types, primaryType: 'SafeTx' }).toLowerCase(),
+  structHash,
+)
+check(
+  'safeTxHash = keccak256(0x1901 ‖ domain ‖ structHash)',
+  keccak256(concat(['0x1901', domain, structHash])).toLowerCase() === mine.toLowerCase(),
+)
 const signature = await signTx(safe, tx)
 check('recoverSigner == signer', (await recoverSigner(mine, signature)).toLowerCase() === account.address.toLowerCase())
 const executed = await exec(safe, tx, signature)
@@ -287,6 +304,24 @@ check(
     () => false,
     () => true,
   ),
+)
+
+// --- rebasing twice (or re-adding the same rebased tx) must keep its signatures ---
+// A dead transaction is re-queued for the current nonce with empty signatures; a
+// merge for the same digest has to preserve signatures already collected for it.
+const rebased: PendingTx = {
+  id: hash3,
+  chainId: 31337,
+  safe,
+  createdAt: Date.now(),
+  tx: serializeTx(tx3),
+  signatures: {},
+}
+const merged = await importPending([rebased])
+check(
+  'importPending keeps signatures of an existing id',
+  merged.filter((p) => p.id === hash3).length === 1 &&
+    merged.find((p) => p.id === hash3)?.signatures[account.address.toLowerCase()] === sig3,
 )
 
 // --- a mined execTransaction is not always an executed call ---

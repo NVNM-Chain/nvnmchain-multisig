@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { encodeFunctionData, getAddress, isAddress, type Address, type Hex, type PublicClient } from 'viem'
 import { errorMessage, FEE_TOKEN, feeTokenSymbol, parseUnits } from '../chain'
-import { tip20Abi } from '../lib/abi'
+import { safeAbi, tip20Abi } from '../lib/abi'
 import { functionRefs, type AbiEntry } from '../lib/contracts'
 import { emptyParam, type ParamValue } from '../lib/abiparams'
 import {
@@ -73,6 +73,7 @@ export function NewTransaction({
   abis,
   nextNonce,
   onQueued,
+  onRefreshInfo,
 }: {
   wallet: Wallet
   safe: Address
@@ -80,14 +81,20 @@ export function NewTransaction({
   abis: readonly AbiEntry[]
   nextNonce: bigint
   onQueued: (item: PendingTx) => void
+  onRefreshInfo: () => void
 }) {
   const [drafts, setDrafts] = useState<Draft[]>([blank()])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<Hex | null>(null)
   const [preview, setPreview] = useState<SafeTxParams | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [nonceText, setNonceText] = useState('')
   const iAmOwner = info.owners.some((o) => o.toLowerCase() === wallet.account?.toLowerCase())
+
+  // The nonce only moves forward, so a preview behind the Safe's nonce is stale. A
+  // preview built from a live read is never flagged, even if `info` has not caught up.
+  const previewStale = preview !== null && preview.nonce < info.nonce
 
   const update = (id: string, patch: Partial<Draft>) => {
     setPreview(null)
@@ -102,6 +109,10 @@ export function NewTransaction({
     setDrafts((ds) => (ds.length === 1 ? ds : ds.filter((d) => d.id !== id)))
   }
 
+  /** The Safe nonce as it is on chain right now — `info` can lag behind it. */
+  const liveNonce = () =>
+    wallet.publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' })
+
   /** The nonce typed in, or the next free one when the field is empty. */
   const chosenNonce = (): bigint => {
     const text = nonceText.trim()
@@ -112,13 +123,24 @@ export function NewTransaction({
     return BigInt(text)
   }
 
+  /** Encode the draft calls and the SafeTx they produce for a given nonce. */
+  const buildTx = async (nonce: bigint) => {
+    const calls: SafeCall[] = []
+    for (const d of drafts) calls.push(await encodeDraft(d))
+    return { calls, tx: buildSafeTx(calls, nonce) }
+  }
+
   const buildPreview = async () => {
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
-      const calls: SafeCall[] = []
-      for (const d of drafts) calls.push(await encodeDraft(d))
-      setPreview(buildSafeTx(calls, chosenNonce()))
+      const nonce = chosenNonce()
+      const { tx } = await buildTx(nonce)
+      computeSafeTxHash(BigInt(wallet.chainId), safe, tx)
+      setPreview(tx)
+      // Keep the header nonce in step with the chain while we are here.
+      onRefreshInfo()
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -170,11 +192,40 @@ export function NewTransaction({
     setBusy(true)
     setError(null)
     setDone(null)
+    setNotice(null)
     try {
-      const calls: SafeCall[] = []
-      for (const d of drafts) calls.push(await encodeDraft(d))
-      const safeTx: SafeTxParams = buildSafeTx(calls, chosenNonce())
+      const nonce = chosenNonce()
+      const { tx: safeTx } = await buildTx(nonce)
       const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, safeTx)
+
+      // The nonce is part of the digest: signing one the Safe has already passed
+      // would produce a transaction nobody can execute.
+      const live = await liveNonce()
+      if (nonce < live) {
+        onRefreshInfo()
+        throw new Error(
+          `The Safe nonce is now ${live}, but this transaction is built for nonce ${nonce}. ` +
+            'It can never execute — set the nonce, preview and sign again.',
+        )
+      }
+
+      // The preview is the confirmation step for the digest. If it is missing, or was
+      // built for another nonce/different calls, show the fresh transaction and require
+      // an explicit second confirmation.
+      const previewHash = preview ? computeSafeTxHash(BigInt(wallet.chainId), safe, preview) : null
+      if (previewHash !== hash) {
+        setPreview(safeTx)
+        onRefreshInfo()
+        setNotice(
+          !preview
+            ? `Preview built for Safe nonce ${nonce}. Review the SafeTx hash below, then press "${iAmOwner ? 'Sign & queue' : 'Queue unsigned'}" again to continue.`
+            : preview.nonce !== nonce
+              ? `The Safe nonce moved from ${preview.nonce} to ${nonce}, so the SafeTx hash changed. The preview has been rebuilt — review it, then press "${iAmOwner ? 'Sign & queue' : 'Queue unsigned'}" again.`
+              : 'The transaction changed since the preview. The preview has been rebuilt — review it, then press again.',
+        )
+        return
+      }
+
       const signatures: PendingTx['signatures'] = {}
       if (iAmOwner) {
         const typed = safeTxTypedData(wallet.chainId, safe, safeTx)
@@ -288,6 +339,7 @@ export function NewTransaction({
               value={draft}
               onChange={(patch) => update(draft.id, patch)}
               abis={abis}
+              disabled={busy}
             />
           )}
         </div>
@@ -324,19 +376,43 @@ export function NewTransaction({
           </Notice>
         </div>
       )}
+      {notice && (
+        <div style={{ marginTop: 14 }}>
+          <Notice kind="warn">{notice}</Notice>
+        </div>
+      )}
 
       <div className="row" style={{ marginTop: 16 }}>
         <button className="btn primary" onClick={queue} disabled={busy || !wallet.account}>
           {busy ? 'Working…' : iAmOwner ? 'Sign & queue' : 'Queue unsigned'}
         </button>
         <button className="btn ghost" onClick={() => void buildPreview()} disabled={busy}>
-          Preview
+          {previewStale ? 'Refresh preview' : 'Preview'}
         </button>
         {!wallet.account && <span className="muted small">Connect a wallet to sign.</span>}
         {wallet.account && !iAmOwner && <span className="muted small">Not an owner: the owners sign from the Queue.</span>}
       </div>
 
-      {preview && <TransactionReview publicClient={wallet.publicClient} tx={preview} abis={abis} />}
+      {previewStale && (
+        <div style={{ marginTop: 14 }}>
+          <Notice kind="warn">
+            The Safe nonce is now <span className="mono">{info.nonce.toString()}</span>, but this
+            preview was built for nonce <span className="mono">{preview?.nonce.toString()}</span>,
+            so its SafeTx hash no longer applies. Refresh the preview and review the new hash before
+            signing.
+          </Notice>
+        </div>
+      )}
+
+      {preview && (
+        <TransactionReview
+          publicClient={wallet.publicClient}
+          safe={safe}
+          chainId={wallet.chainId}
+          tx={preview}
+          abis={abis}
+        />
+      )}
     </section>
   )
 }

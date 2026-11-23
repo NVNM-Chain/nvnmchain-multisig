@@ -72,7 +72,7 @@ export function encodeSafeSetup(params: {
   to?: Address
   data?: Hex
 }): Hex {
-  // Safe's `setup` requires owners to be unique and strictly ascending by address.
+  // Sorted, so the address does not depend on the order owners are typed in.
   const byAddress = new Map<string, Address>()
   for (const owner of params.owners) {
     const address = getAddress(owner)
@@ -151,6 +151,12 @@ export function buildSafeTx(calls: SafeCall[], nonce: bigint): SafeTxParams {
     operation: 1,
     nonce,
   }
+}
+
+/** The lowest nonce, from the Safe's own upward, that no open transaction has taken. */
+export function nextFreeNonce(nonce: bigint, taken: bigint[]): bigint {
+  while (taken.includes(nonce)) nonce++
+  return nonce
 }
 
 const SAFE_TX_TYPEHASH = keccak256(
@@ -246,6 +252,11 @@ export function safeTxTypedData(chainId: number, safe: Address, tx: SafeTxParams
   } as const
 }
 
+/** True for `0x` followed by whole bytes of hex, exactly `size` of them when given. */
+export function isBytes(value: unknown, size?: number): value is Hex {
+  return typeof value === 'string' && /^0x([0-9a-fA-F]{2})*$/.test(value) && (size === undefined || value.length === 2 + 2 * size)
+}
+
 /** Some wallets return `v = 0/1`; Safe's `ecrecover` expects 27/28. */
 export function normalizeSignatureV(signature: Hex): Hex {
   const v = Number.parseInt(signature.slice(-2), 16)
@@ -331,13 +342,4 @@ export function deserializeTx(t: StoredTx): SafeTxParams {
     refundReceiver: t.refundReceiver as Address,
     nonce: BigInt(t.nonce),
   }
-}
-
-/** Short human summary of an encoded call for labels / lists. */
-export function describeCall(call: SafeCall): string {
-  if (call.data === '0x' || call.data === '0x0') {
-    return `send ${call.value.toString()} wei → ${call.to}`
-  }
-  const selector = call.data.slice(0, 10)
-  return `${call.to} ${selector}…`
 }

@@ -3,15 +3,9 @@ import { formatUnits, type Address, type Hex, type PublicClient } from 'viem'
 import { shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
-import { decodeMultiSend, isMultiSendCall, selectorOf, type PackedCall } from '../lib/decode'
+import { callsOf, selectorOf, type PackedCall } from '../lib/decode'
 import { decodeWithAbis, type AbiEntry, type DecodedWithAbi } from '../lib/contracts'
-import {
-  computeSafeTxHash,
-  safeDomainSeparator,
-  safeTxStructHash,
-  SAFE_ADDRESSES,
-  type SafeTxParams,
-} from '../lib/safe'
+import { computeSafeTxHash, safeDomainSeparator, safeTxStructHash, type SafeTxParams } from '../lib/safe'
 import { AddressLink, CopyButton, Notice } from './ui'
 
 function isAddress(value: unknown): value is Address {
@@ -37,88 +31,40 @@ function describe(decoded: DecodedWithAbi | null, selector: Hex, meta: TokenMeta
   if (!decoded) {
     return selector === '0x' ? 'empty call' : `unknown function ${selector}`
   }
-  const symbol = meta ? ` ${meta.symbol}` : ''
-  const decimals = meta?.decimals ?? 6
+  const units = (amount: bigint) =>
+    meta ? `${formatUnits(amount, meta.decimals)} ${meta.symbol}` : `${amount} base units`
   const args = decoded.args
   const name = decoded.fn.name
   if (name === 'transfer') {
     const [to, amount] = args as [Address, bigint]
-    return `Transfer ${formatUnits(amount, decimals)}${symbol} → ${shortAddress(to, 4)}`
+    return `Transfer ${units(amount)} → ${shortAddress(to, 4)}`
   }
   if (name === 'transferFrom') {
     const [from, to, amount] = args as [Address, Address, bigint]
-    return `Transfer ${formatUnits(amount, decimals)}${symbol} · ${shortAddress(from, 4)} → ${shortAddress(to, 4)}`
+    return `Transfer ${units(amount)} · ${shortAddress(from, 4)} → ${shortAddress(to, 4)}`
   }
   if (name === 'approve') {
     const [spender, amount] = args as [Address, bigint]
-    return `Approve ${formatUnits(amount, decimals)}${symbol} → ${shortAddress(spender, 4)}`
+    return `Approve ${units(amount)} → ${shortAddress(spender, 4)}`
   }
   return `${name}(${args.map(formatArg).join(', ')})`
 }
 
-function CallRow({
-  publicClient,
-  abis,
-  call,
-  index,
-  total,
-}: {
-  publicClient: PublicClient
-  abis: readonly AbiEntry[]
-  call: PackedCall
-  index: number
-  total: number
-}) {
-  const decoded = useMemo(() => decodeWithAbis(abis, call.to, call.data), [abis, call.to, call.data])
-  const selector = selectorOf(call.data)
-  const isTokenCall = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name)
-  const meta = useTokenMeta(publicClient, isTokenCall ? call.to : null)
-  const summary = useMemo(() => describe(decoded, selector, meta), [decoded, selector, meta])
+/** Decode a call with the registered ABIs; for a token call, also load the token. */
+function useDecoded(publicClient: PublicClient, abis: readonly AbiEntry[], call: PackedCall | undefined) {
+  const decoded = useMemo(() => (call ? decodeWithAbis(abis, call.to, call.data) : null), [abis, call])
+  const isToken = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name)
+  const meta = useTokenMeta(publicClient, call && isToken ? call.to : null)
+  return { decoded, meta }
+}
 
-  return (
-    <div className="tx-call">
-      <div className="row between">
-        <span className="badge">{total > 1 ? `call ${index + 1}/${total}` : 'call'}</span>
-        <span className="mono-sm">{summary}</span>
-      </div>
-      <dl className="kv" style={{ marginTop: 8 }}>
-        <dt>target</dt>
-        <dd>
-          <AddressLink address={call.to} short={false} />
-        </dd>
-        <dt>operation</dt>
-        <dd>{call.operation === 1 ? 'delegatecall' : 'call'}</dd>
-        {decoded && (
-          <>
-            <dt>function</dt>
-            <dd className="mono-sm truncate" title={decoded.signature}>
-              {decoded.signature}
-            </dd>
-            <dt>interface</dt>
-            <dd>
-              {decoded.entry.name}
-              {decoded.entry.address ? '' : <span className="muted"> · inferred</span>}
-            </dd>
-          </>
-        )}
-        {call.value > 0n && (
-          <>
-            <dt>value</dt>
-            <dd className="mono">{call.value.toString()}</dd>
-          </>
-        )}
-        <dt>calldata</dt>
-        <dd className="mono-sm wrap-any" title={call.data}>
-          {call.data === '0x' ? <span className="muted">(none)</span> : call.data}
-        </dd>
-      </dl>
-      {call.data !== '0x' && (
-        <div className="row" style={{ marginTop: 8 }}>
-          <CopyButton value={call.data} label="copy calldata" />
-        </div>
-      )}
-    </div>
-  )
+/** One-line title of a Safe transaction, read from its calldata. */
+export function TxTitle({ publicClient, abis, tx }: { publicClient: PublicClient; abis: readonly AbiEntry[]; tx: SafeTxParams }) {
+  const { batch, calls } = useMemo(() => callsOf(tx), [tx])
+  const { decoded, meta } = useDecoded(publicClient, abis, batch ? undefined : calls[0])
+  if (batch) return `${calls.length} calls (MultiSend)`
+  if (decoded) return describe(decoded, selectorOf(tx.data), meta)
+  return `${tx.operation === 1 ? 'Delegatecall' : 'Call'} ${shortAddress(tx.to, 4)}`
 }
 
 /** Hashes a signer device shows, read from the Safe itself when it exposes them. */
@@ -210,6 +156,69 @@ function HashRow({
   )
 }
 
+function CallRow({
+  publicClient,
+  abis,
+  call,
+  index,
+  total,
+}: {
+  publicClient: PublicClient
+  abis: readonly AbiEntry[]
+  call: PackedCall
+  index: number
+  total: number
+}) {
+  const { decoded, meta } = useDecoded(publicClient, abis, call)
+  const selector = selectorOf(call.data)
+  const summary = useMemo(() => describe(decoded, selector, meta), [decoded, selector, meta])
+
+  return (
+    <div className="tx-call">
+      <div className="row between">
+        <span className="badge">{total > 1 ? `call ${index + 1}/${total}` : 'call'}</span>
+        <span className="mono-sm">{summary}</span>
+      </div>
+      <dl className="kv" style={{ marginTop: 8 }}>
+        <dt>target</dt>
+        <dd>
+          <AddressLink address={call.to} short={false} />
+        </dd>
+        <dt>operation</dt>
+        <dd>{call.operation === 1 ? 'delegatecall' : 'call'}</dd>
+        {decoded && (
+          <>
+            <dt>function</dt>
+            <dd className="mono-sm truncate" title={decoded.signature}>
+              {decoded.signature}
+            </dd>
+            <dt>interface</dt>
+            <dd>
+              {decoded.entry.name}
+              {decoded.entry.address ? '' : <span className="muted"> · inferred</span>}
+            </dd>
+          </>
+        )}
+        {call.value > 0n && (
+          <>
+            <dt>value</dt>
+            <dd className="mono">{call.value.toString()}</dd>
+          </>
+        )}
+        <dt>calldata</dt>
+        <dd className="mono-sm wrap-any" title={call.data}>
+          {call.data === '0x' ? <span className="muted">(none)</span> : call.data}
+        </dd>
+      </dl>
+      {call.data !== '0x' && (
+        <div className="row" style={{ marginTop: 8 }}>
+          <CopyButton value={call.data} label="copy calldata" />
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Decoded, human-readable review of a Safe transaction. */
 export function TransactionReview({
   publicClient,
@@ -242,23 +251,14 @@ export function TransactionReview({
       ? null
       : onchain.safeTxHash.toLowerCase() === hashes.safeTxHash.toLowerCase()
 
-  const batch = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
-  const calls = useMemo<PackedCall[]>(() => {
-    if (batch) {
-      try {
-        return decodeMultiSend(tx.data)
-      } catch {
-        /* fall through to a single raw call */
-      }
-    }
-    return [{ operation: tx.operation, to: tx.to, value: tx.value, data: tx.data }]
-  }, [batch, tx])
+  const { batch, calls } = useMemo(() => callsOf(tx), [tx])
 
   return (
     <div className="review">
-      <div className="muted small">
+      <div className="muted small" style={{ marginBottom: 8 }}>
         {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
       </div>
+
       <dl className="kv" style={{ margin: '8px 0' }}>
         <HashRow
           label="safeTxHash"

@@ -1,5 +1,5 @@
 import { getAddress, isAddress, type Address, type Hex } from 'viem'
-import type { PendingTx } from './storage'
+import { parsePending, type PendingTx } from './storage'
 
 /** A single owner approval, small enough to paste into a chat message. */
 export type SignatureShare = {
@@ -33,26 +33,9 @@ function fromBase64Url(value: string): string {
   return new TextDecoder().decode(bytes)
 }
 
-function assertPending(value: unknown): PendingTx[] {
-  const list = Array.isArray(value) ? value : [value]
-  return list.map((item) => {
-    const tx = item as PendingTx
-    if (
-      !tx ||
-      typeof tx !== 'object' ||
-      typeof tx.id !== 'string' ||
-      !tx.id.startsWith('0x') ||
-      typeof tx.safe !== 'string' ||
-      typeof tx.chainId !== 'number' ||
-      typeof tx.tx !== 'object' ||
-      tx.tx === null ||
-      typeof tx.signatures !== 'object' ||
-      tx.signatures === null
-    ) {
-      throw new Error('Unrecognised payload')
-    }
-    return { ...tx, signatures: { ...tx.signatures }, label: tx.label ?? 'Shared transaction' }
-  })
+/** Check an imported transaction or list; an import never marks anything executed. */
+export function parseShared(value: unknown): PendingTx[] {
+  return (Array.isArray(value) ? value : [value]).map((item) => ({ ...parsePending(item), executedTxHash: undefined }))
 }
 
 /** Encode pending transactions into a URL-safe fragment value. */
@@ -61,7 +44,7 @@ export function encodeShare(items: PendingTx[]): string {
 }
 
 export function decodeShare(encoded: string): PendingTx[] {
-  return assertPending(JSON.parse(fromBase64Url(encoded)))
+  return parseShared(JSON.parse(fromBase64Url(encoded)))
 }
 
 function assertSignatureShare(value: unknown): SignatureShare {

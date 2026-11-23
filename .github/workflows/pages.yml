@@ -1,8 +1,11 @@
 name: Deploy to GitHub Pages
 
+# Deploy only tagged releases (e.g. v0.1.0). Pushes to main are validated by
+# ci.yml but never published, so the live site always maps to a tag.
 on:
   push:
-    branches: [main]
+    tags: ['v*.*.*']
+  # Manual escape hatch: picks whatever ref is selected in the UI.
   workflow_dispatch:
 
 # Allow the workflow to publish to Pages and mint an OIDC token for deployment.
@@ -20,6 +23,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve release
+        # Fails fast if a manual run was started from a non-tag ref, so the
+        # published site can never be built from an arbitrary commit.
+        run: |
+          ref="$GITHUB_REF"
+          if [ "${ref#refs/tags/v}" = "$ref" ]; then
+            echo "::error::Pages deploys require a semver tag (refs/tags/v*), got $ref"
+            exit 1
+          fi
+          echo "Deploying $ref"
+
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -41,6 +55,7 @@ jobs:
 
       - name: Build
         # vite.config.ts derives the base path from GITHUB_REPOSITORY.
+        # BASE_PATH is left alone so the repo-derived default still wins.
         run: npm run build
 
       - name: Upload artifact

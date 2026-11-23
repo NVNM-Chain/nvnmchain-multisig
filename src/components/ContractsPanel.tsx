@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CREATE2_FACTORY, DEPLOYABLE_ARTIFACTS, deployCalldata, safeSuiteStatus, type DeployableKey } from '../lib/safe'
-import { chainFor, errorMessage } from '../chain'
-import type { Wallet } from '../lib/wallet'
+import { errorMessage } from '../chain'
+import { send, type Wallet } from '../lib/wallet'
 import { AddressLink, Notice } from './ui'
 
 /**
  * One-time deployment of the Safe v1.3.0 suite through the
  * pre-deployed deterministic CREATE2 factory (salt = 0).
  */
-export function ContractsPanel({ wallet, onDeployed }: { wallet: Wallet; onDeployed?: () => void }) {
+export function ContractsPanel({ wallet }: { wallet: Wallet }) {
   const [status, setStatus] = useState<Record<DeployableKey, boolean> | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -39,12 +39,7 @@ export function ContractsPanel({ wallet, onDeployed }: { wallet: Wallet; onDeplo
           continue
         }
         setLogs((l) => [...l, `→ deploying ${artifact.label}…`])
-        const hash = await wallet.walletClient.sendTransaction({
-          account: wallet.account,
-          chain: chainFor(wallet.networkKey),
-          to: CREATE2_FACTORY,
-          data: deployCalldata(artifact.key),
-        })
+        const hash = await send(wallet, { to: CREATE2_FACTORY, data: deployCalldata(artifact.key) })
         setLogs((l) => [...l, `   tx ${hash}`])
         const receipt = await wallet.publicClient.waitForTransactionReceipt({ hash })
         const after = await wallet.publicClient.getCode({ address: artifact.address })
@@ -55,7 +50,6 @@ export function ContractsPanel({ wallet, onDeployed }: { wallet: Wallet; onDeplo
         await refresh()
       }
       await refresh()
-      onDeployed?.()
     } catch (e) {
       setError(errorMessage(e))
     } finally {

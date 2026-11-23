@@ -11,6 +11,8 @@ export function SafeDashboard({
   safe,
   info,
   pendingCount,
+  remembered,
+  onRemember,
   onNewTx,
   onForget,
   onRefresh,
@@ -20,6 +22,8 @@ export function SafeDashboard({
   safe: Address
   info: SafeInfo
   pendingCount: number
+  remembered: boolean
+  onRemember: () => void
   onNewTx: () => void
   onForget: () => void
   onRefresh: () => void
@@ -46,6 +50,11 @@ export function SafeDashboard({
             <span className="badge ok"><span className="dot ok" /> you are an owner</span>
           ) : (
             <span className="badge">not an owner</span>
+          )}
+          {!remembered && (
+            <button className="btn small ghost" title="Keep this Safe in your recent list" onClick={onRemember}>
+              Remember
+            </button>
           )}
           <button
             className="btn small ghost"

@@ -108,7 +108,7 @@ npm run dev      # http://localhost:5174
 npm run build    # type-check + production bundle in dist/
 ```
 
-Push to `main` deploys to GitHub Pages via [`.github/workflows/pages.yml`](.github/workflows/pages.yml); [`ci.yml`](.github/workflows/ci.yml) type-checks and builds, runs the ABI checks, then runs the Safe integration checks against anvil. Enable **Settings → Pages → Source: GitHub Actions** once (the workflow can also do it). The base path is derived from the repo name — set `BASE_PATH=/…/` to override.
+Pushing a tag such as `v0.1.0` (`git tag v0.1.0 && git push origin v0.1.0`) deploys to GitHub Pages via [`.github/workflows/pages.yml`](.github/workflows/pages.yml) — plain `main` pushes are validated but never published, so the live site always corresponds to a tagged release. [`ci.yml`](.github/workflows/ci.yml) type-checks and builds every push and PR, runs the ABI checks, then runs the Safe integration checks against anvil. Enable **Settings → Pages → Source: GitHub Actions** once (the workflow can also do it). The base path is derived from the repo name — set `BASE_PATH=/…/` to override.
 
 ### Verify
 
@@ -154,13 +154,15 @@ src/
   A threshold-signed transaction can be executed by anyone, so treat exported
   signatures and share links as sensitive until it runs.
 - A queued transaction is only executable while the Safe's nonce still matches;
-  the queue separates a **dead** nonce (behind the Safe — can never execute, offers
+  the queue separates a **stale** nonce (behind the Safe — can never execute, offers
   a one-click *Rebase to the current nonce* that keeps the calls and drops the
   signatures) from a **future** one (ahead of the Safe — pre-signable). Signing,
   on-chain approval and execution each re-read the nonce from the Safe rather
   than trusting the cached value, so a tx that died in another tab cannot cost
   gas or a wallet confirmation. The nonce is part of the `safeTxHash`, so a
   preview built for another nonce is always rebuilt before it can be signed.
+- `*.github.io` is one origin for all of an account's Pages projects, so they share
+  this app's `localStorage`. Serve it from its own domain to keep the queue private.
 - Always verify the Safe address, target and calldata in your wallet before signing.
 - A Ledger shows the EIP-712 **domain hash** and **message hash** instead of the
   final digest. The review shows both (`domainSeparator`, `structHash`) so they

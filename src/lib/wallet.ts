@@ -6,10 +6,21 @@ import {
   http,
   type Address,
   type EIP1193Provider,
+  type Hex,
   type PublicClient,
   type WalletClient,
 } from 'viem'
-import { chainFor, errorMessage, getNetwork, getNetworkKey, NETWORKS, setNetworkKey as persistNetwork, type NetworkKey } from '../chain'
+import {
+  chainFor,
+  errorMessage,
+  gasToSend,
+  getNetwork,
+  getNetworkKey,
+  networkKeyForChainId,
+  NETWORKS,
+  setNetworkKey as persistNetwork,
+  type NetworkKey,
+} from '../chain'
 
 type InjectedProvider = EIP1193Provider & {
   on?: (event: string, handler: (...args: any[]) => void) => void
@@ -68,6 +79,14 @@ export type Wallet = {
   setNetworkKey: (key: NetworkKey) => void
 }
 
+/** Send a call with `gasToSend` of the node's estimate as its gas, so the wallet does not pad it. */
+export async function send(wallet: Wallet, call: { to: Address; data: Hex }): Promise<Hex> {
+  if (!wallet.walletClient || !wallet.account) throw new Error('Connect a wallet first.')
+  const request = { account: wallet.account, ...call }
+  const gas = gasToSend(await wallet.publicClient.estimateGas(request))
+  return wallet.walletClient.sendTransaction({ ...request, chain: chainFor(wallet.networkKey), gas })
+}
+
 export function useWallet(): Wallet {
   const [networkKey, setKey] = useState<NetworkKey>(getNetworkKey())
   const [account, setAccount] = useState<Address | null>(null)
@@ -101,7 +120,13 @@ export function useWallet(): Wallet {
       })
       .catch(() => {})
     const onAccounts = (accounts: Address[]) => setAccount(accounts?.[0] ?? null)
-    const onChain = () => readChain()
+    // Follow a network picked in the wallet, but not on load, so a link's network wins.
+    const onChain = (id: string) => {
+      const chainId = Number.parseInt(id, 16)
+      setWalletChainId(chainId)
+      const key = networkKeyForChainId(chainId)
+      if (key && key !== getNetworkKey()) persistNetwork(key)
+    }
     provider.on?.('accountsChanged', onAccounts)
     provider.on?.('chainChanged', onChain)
     return () => {
@@ -159,7 +184,13 @@ export function useWallet(): Wallet {
 
   const disconnect = useCallback(() => setAccount(null), [])
 
-  const setNetworkKey = useCallback((key: NetworkKey) => persistNetwork(key), [])
+  const setNetworkKey = useCallback(
+    (key: NetworkKey) => {
+      persistNetwork(key)
+      if (account) void switchNetwork()
+    },
+    [account, switchNetwork],
+  )
 
   return {
     provider,

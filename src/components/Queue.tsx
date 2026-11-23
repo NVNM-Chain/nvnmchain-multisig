@@ -17,7 +17,7 @@ import { buildShareUrl, encodeSignatureShare, parseSignatureShare } from '../lib
 import { importSignatureShare } from '../lib/coordinate'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
-import { markExecuted, mergePending, mergeSignature, removePending, upsertPending, type PendingTx } from '../lib/storage'
+import { markExecuted, mergePending, mergeSignature, removePending, type PendingTx } from '../lib/storage'
 import type { Wallet } from '../lib/wallet'
 import { Notice, TxLink } from './ui'
 import { TransactionReview } from './TransactionReview'
@@ -245,16 +245,21 @@ function QueuedTxCard({
       }
       const next = { ...tx, nonce }
       const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, next)
+      // merge (not upsert) so an owner who already rebased — or signed the
+      // replacement — keeps their signatures: the new digest is unique, so no
+      // signature from the dead one can leak in.
       onChanged(
-        upsertPending({
-          id: hash,
-          chainId: wallet.chainId,
-          safe,
-          createdAt: Date.now(),
-          label: item.label,
-          tx: serializeTx(next),
-          signatures: {},
-        }),
+        mergePending([
+          {
+            id: hash,
+            chainId: wallet.chainId,
+            safe,
+            createdAt: Date.now(),
+            label: item.label,
+            tx: serializeTx(next),
+            signatures: {},
+          },
+        ]),
       )
       onExecuted()
     })

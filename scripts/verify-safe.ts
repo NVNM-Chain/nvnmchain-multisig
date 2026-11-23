@@ -34,7 +34,7 @@ import {
 import { importSignatureShare } from '../src/lib/coordinate'
 import { decodeMultiSend, isMultiSendCall } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
-import { upsertPending, type PendingTx } from '../src/lib/storage'
+import { mergePending, upsertPending, type PendingTx } from '../src/lib/storage'
 
 // localStorage shim so the pending-transaction store works under bun.
 const mem = new Map<string, string>()
@@ -243,6 +243,25 @@ check(
   'importSignatureShare adds the single signature',
   imported.owner.toLowerCase() === account.address.toLowerCase() &&
     imported.list.find((p) => p.id === hash3)?.signatures[account.address.toLowerCase()] === sig3,
+)
+
+// --- rebasing twice (or re-adding the same rebased tx) must keep its signatures ---
+// A dead transaction is re-queued for the current nonce with empty signatures; a
+// merge for the same digest has to preserve signatures already collected for it.
+const rebased: PendingTx = {
+  id: hash3,
+  chainId: 31337,
+  safe,
+  createdAt: Date.now(),
+  label: 'rebased',
+  tx: serializeTx(tx3),
+  signatures: {},
+}
+const merged = mergePending([rebased])
+check(
+  'mergePending keeps signatures of an existing id',
+  merged.filter((p) => p.id === hash3).length === 1 &&
+    merged.find((p) => p.id === hash3)?.signatures[account.address.toLowerCase()] === sig3,
 )
 
 // --- a mined execTransaction is not always an executed call ---

@@ -3,7 +3,7 @@ import type { Address } from 'viem'
 import { getNetwork, getNetworkKey, networkKeyForChainId, setNetworkKey as persistNetwork, errorMessage } from './chain'
 import { useSafeInfo } from './lib/hooks'
 import { allAbis, type AbiEntry } from './lib/contracts'
-import { loadPending, loadTrackedSafes, mergePending, trackSafe, untrackSafe, upsertPending, type PendingTx, type TrackedSafe } from './lib/storage'
+import { loadPending, loadTrackedSafes, mergePending, trackSafe, untrackSafe, type PendingTx, type TrackedSafe } from './lib/storage'
 import { clearShareFromLocation, readShareLink, type SignatureShare } from './lib/share'
 import { importSignatureShare } from './lib/coordinate'
 import { useWallet } from './lib/wallet'
@@ -251,7 +251,7 @@ export default function App() {
                 safe={safe}
                 info={info}
                 abis={abis}
-                onQueued={(item) => setPending(upsertPending(item))}
+                onQueued={(item) => setPending(mergePending([item]))}
                 onRefreshInfo={() => void refreshInfo()}
               />
             ) : (

@@ -41,7 +41,10 @@ export function useSafeInfo(publicClient: PublicClient, safe: Address | null) {
       ])
       if (run === latest.current) setInfo({ version, owners: [...owners], threshold, nonce })
     } catch (e) {
-      if (run === latest.current) setError(errorMessage(e))
+      if (run === latest.current) {
+		  setInfo(null)
+		  setError(errorMessage(e))
+	  }
     } finally {
       if (run === latest.current) setLoading(false)
     }

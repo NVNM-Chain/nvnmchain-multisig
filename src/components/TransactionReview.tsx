@@ -4,7 +4,7 @@ import { FEE_TOKEN, shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import { readSafeTxHash } from '../lib/coordinate'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
-import { callsOf, selectorOf, type PackedCall } from '../lib/decode'
+import { callsOf, nativeValueProblem, selectorOf, type PackedCall } from '../lib/decode'
 import { decodeWithAbis, type AbiEntry, type DecodedWithAbi } from '../lib/contracts'
 import { computeSafeTxHash, safeDomainSeparator, safeTxStructHash, type SafeTxParams } from '../lib/safe'
 import { AddressLink, CopyButton, Notice } from './ui'
@@ -245,6 +245,9 @@ export function TransactionReview({
       : onchain.safeTxHash.toLowerCase() === hashes.safeTxHash.toLowerCase()
 
   const { batch, calls } = useMemo(() => callsOf(tx), [tx])
+  // No native token on this chain: value is not a risk to weigh, it is a
+  // transaction that cannot run. The queue refuses to sign or execute it.
+  const valueProblem = nativeValueProblem(tx)
 
   return (
     <div className="review">
@@ -252,10 +255,9 @@ export function TransactionReview({
         {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
       </div>
 
-      {batch && tx.value > 0n && (
-        <Notice kind="warn">
-          This batch carries <span className="mono">{tx.value.toString()}</span> wei with the delegatecall to
-          MultiSendCallOnly, which keeps it rather than forwarding it to the calls.
+      {valueProblem && (
+        <Notice kind="err">
+          {valueProblem} Signing and executing are refused.
         </Notice>
       )}
 
@@ -303,6 +305,8 @@ export function TransactionReview({
         <dl className="kv" style={{ marginTop: 8 }}>
           <dt>nonce</dt>
           <dd className="mono">{tx.nonce.toString()}</dd>
+          <dt>value</dt>
+          <dd className="mono">{tx.value.toString()}</dd>
           <dt>safeTxGas</dt>
           <dd className="mono">{tx.safeTxGas.toString()}</dd>
           <dt>baseGas</dt>

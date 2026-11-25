@@ -17,7 +17,7 @@ import {
   type SafeTxParams,
 } from '../lib/safe'
 import { assertSafeTxHash } from '../lib/coordinate'
-import { txRisks } from '../lib/decode'
+import { nativeValueProblem, txRisks } from '../lib/decode'
 import { useTokenMeta, type SafeInfo } from '../lib/hooks'
 import type { PendingTx } from '../lib/storage'
 import { assertOnCorrectChain, type Wallet } from '../lib/wallet'
@@ -196,6 +196,10 @@ export function NewTransaction({
     try {
       const nonce = await chosenNonce()
       const safeTx = await buildTx(nonce)
+      // Defense in depth: the builder never sets value (this chain has no native
+      // token), and anything that did must not reach a wallet.
+      const valueProblem = nativeValueProblem(safeTx)
+      if (valueProblem) throw new Error(valueProblem)
       const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, safeTx)
 
       // Queue only a hash the preview showed; otherwise show the new one and wait for a second press.

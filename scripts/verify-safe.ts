@@ -45,7 +45,7 @@ import {
   readShareLink,
 } from '../src/lib/share'
 import { assertSafeIdentity, assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
-import { decodeMultiSend, isMultiSendCall, txRisks } from '../src/lib/decode'
+import { decodeMultiSend, isMultiSendCall, nativeValueProblem, txRisks } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
 import { loadPending, rebasePending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
 
@@ -411,9 +411,21 @@ check(
   'a batch that sets the operation MultiSendCallOnly ignores is flagged',
   txRisks(opByteBatch).some((risk) => risk.startsWith('Operation byte')),
 )
+const fundedBatch = {
+  ...batchTx,
+  data: encodeFunctionData({
+    abi: multiSendCallOnlyAbi,
+    functionName: 'multiSend',
+    args: [packMultiSend([{ to: '0x000000000000000000000000000000000000dEaD', value: 7n, data: '0x' }])],
+  }),
+}
 check(
-  'a batch carrying value with its delegatecall is flagged',
-  txRisks({ ...batchTx, value: 1n }).some((risk) => risk.startsWith('Value')),
+  'value is refused, not merely flagged (no native token on this chain)',
+  nativeValueProblem(tx) === null &&
+    nativeValueProblem(batchTx) === null &&
+    (nativeValueProblem({ ...tx, value: 1n }) ?? '').includes('no native token') &&
+    (nativeValueProblem({ ...batchTx, value: 1n }) ?? '').includes('no native token') &&
+    (nativeValueProblem(fundedBatch) ?? '').includes('inside this batch'),
 )
 
 // --- queueing the same transaction again must keep its signatures ---

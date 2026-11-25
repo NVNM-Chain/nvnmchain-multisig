@@ -178,9 +178,15 @@ src/
   `(unverified interface)` — any contract can answer `symbol()`/`decimals()` for a
   selector that merely looks like `transfer(address,uint256)`. Raw target and
   calldata are always shown.
+- **No native value, ever.** NVNM is a Tempo fork with no native token, so no
+  transaction may carry `value`: the builder never offers a field for it, and the
+  queue refuses to sign, approve or execute a transaction whose `value` — or any
+  call inside a MultiSend batch — is non-zero. A share link can still carry one (it
+  is part of the signed struct), and the review shows it in red rather than letting
+  it look executable.
 - **MultiSendCallOnly ignores the per-call operation byte** and always calls: a
-  batch that sets it is flagged, and a value carried with the batch's delegatecall
-  is flagged too.
+  batch that sets it is flagged. A gas refund denominated in the native currency
+  cannot be paid on this chain and is flagged as a failing execution.
 - Imports are strict: a queued transaction must hash to its own `id`, every
   signature must be 65 bytes and recover to the owner it names, and a link whose
   Safe/network disagrees with the transactions it carries is flagged.

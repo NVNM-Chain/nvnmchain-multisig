@@ -3,7 +3,7 @@ import { encodeFunctionData, getAddress, isAddress, type Address } from 'viem'
 import { errorMessage } from '../chain'
 import { send, type Wallet } from '../lib/wallet'
 import { SAFE_ADDRESSES, encodeSafeSetup, predictSafeAddress } from '../lib/safe'
-import { safeProxyFactoryAbi } from '../lib/abi'
+import { safeAbi, safeProxyFactoryAbi } from '../lib/abi'
 import type { TrackedSafe } from '../lib/storage'
 import { AddressLink, Field, Notice } from './ui'
 
@@ -90,6 +90,23 @@ export function SafePicker({
       const code = await wallet.publicClient.getCode({ address: predicted })
       if (receipt.status !== 'success' || !code || code === '0x') {
         throw new Error(`The Safe was not deployed — transaction ${hash}.`)
+      }
+      // The proxy address commits to the initializer only through the salt, so read
+      // the deployed state back instead of trusting the factory to have set it up.
+      const [deployedOwners, deployedThreshold] = await Promise.all([
+        wallet.publicClient.readContract({ address: predicted, abi: safeAbi, functionName: 'getOwners' }),
+        wallet.publicClient.readContract({ address: predicted, abi: safeAbi, functionName: 'getThreshold' }),
+      ])
+      const requested = new Set(owners.list.map((owner) => owner.toLowerCase()))
+      const matches =
+        deployedOwners.length === requested.size &&
+        deployedOwners.every((owner) => requested.has(owner.toLowerCase())) &&
+        deployedThreshold === BigInt(thresholdNum)
+      if (!matches) {
+        throw new Error(
+          `The Safe at ${predicted} does not hold the owners and threshold that were requested ` +
+            `(${deployedOwners.length} owners, threshold ${deployedThreshold}). Do not use it.`,
+        )
       }
       setCreated(predicted)
       onLoad(predicted)

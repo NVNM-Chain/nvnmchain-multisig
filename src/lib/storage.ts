@@ -1,5 +1,5 @@
 import { getAddress, isAddress, type Address, type Hex } from 'viem'
-import { computeSafeTxHash, deserializeTx, isBytes, isUint256, nextFreeNonce, serializeTx } from './safe'
+import { assertSignature, computeSafeTxHash, deserializeTx, isBytes, isUint256, nextFreeNonce, serializeTx } from './safe'
 
 /** Serialized (JSON-safe) form of a Safe transaction. */
 export type StoredTx = {
@@ -62,6 +62,7 @@ export function parsePending(value: unknown): PendingTx {
   const raw = (item.tx ?? {}) as Partial<StoredTx>
   if (
     !Number.isSafeInteger(item.chainId) ||
+    (item.chainId as number) <= 0 ||
     ![item.safe, raw.to, raw.gasToken, raw.refundReceiver].every(isAddr) ||
     ![raw.value, raw.safeTxGas, raw.baseGas, raw.gasPrice, raw.nonce].every(isUint256) ||
     !isBytes(raw.data) ||
@@ -113,8 +114,9 @@ export function upsertPending(item: PendingTx): PendingTx[] {
 }
 
 export function mergeSignature(id: Hex, owner: Address, signature: Hex): PendingTx[] {
+  const valid = assertSignature(signature)
   const list = loadPending().map((p) =>
-    p.id === id ? { ...p, signatures: { ...p.signatures, [owner.toLowerCase()]: signature } } : p,
+    p.id === id ? { ...p, signatures: { ...p.signatures, [owner.toLowerCase()]: valid } } : p,
   )
   savePending(list)
   return list

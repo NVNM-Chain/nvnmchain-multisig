@@ -32,6 +32,15 @@ export function ContractsPanel({ wallet }: { wallet: Wallet }) {
     setError(null)
     setLogs([])
     try {
+      // A call to an empty address succeeds and does nothing, so check the factory
+      // first instead of burning a fee on a no-op that only fails afterwards.
+      const factory = await wallet.publicClient.getCode({ address: CREATE2_FACTORY })
+      if (!factory || factory === '0x') {
+        throw new Error(
+          `The Safe singleton factory ${CREATE2_FACTORY} is not deployed on this network, so the suite ` +
+            'cannot be deployed through it. Its deployment transaction is pre-signed and public — broadcast that first.',
+        )
+      }
       for (const artifact of DEPLOYABLE_ARTIFACTS) {
         const existing = await wallet.publicClient.getCode({ address: artifact.address })
         if (existing && existing !== '0x') {

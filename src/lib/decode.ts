@@ -72,8 +72,27 @@ export function callsOf(tx: SafeTxParams): { batch: boolean; calls: PackedCall[]
 /** Warnings for a delegatecall outside MultiSend and for a gas refund the Safe pays. */
 export function txRisks(tx: SafeTxParams): string[] {
   const risks: string[] = []
-  if (tx.operation === 1 && !isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
+  const multiSend = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
+  if (tx.operation === 1 && !multiSend) {
     risks.push(`Delegatecall: the code at ${tx.to} runs as the Safe and can change its owners or move everything it holds.`)
+  }
+  if (multiSend) {
+    // MultiSendCallOnly hard-codes CALL, so a review that honours the packed
+    // operation byte would describe a different transaction than the one that runs.
+    if (tx.value > 0n) {
+      risks.push(
+        `Value: this batch is a delegatecall to MultiSendCallOnly carrying ${tx.value} wei; MultiSendCallOnly keeps it instead of forwarding it to the calls.`,
+      )
+    }
+    try {
+      if (decodeMultiSend(tx.data).some((call) => call.operation !== 0)) {
+        risks.push(
+          'Operation byte: this batch sets a per-call operation, but MultiSendCallOnly ignores it and runs every entry as a plain call.',
+        )
+      }
+    } catch {
+      /* malformed batch: already shown as a raw call */
+    }
   }
   if (tx.gasPrice > 0n) {
     const token = tx.gasToken === zeroAddress ? 'the native token' : `token ${tx.gasToken}`

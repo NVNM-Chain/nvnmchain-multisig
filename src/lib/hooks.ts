@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Address, PublicClient } from 'viem'
 import { safeAbi, tip20Abi } from './abi'
+import { SAFE_MASTER_COPY_SLOT, safeIdentityProblem } from './safe'
 import { errorMessage } from '../chain'
 
 export type SafeInfo = {
@@ -31,12 +32,18 @@ export function useSafeInfo(publicClient: PublicClient, safe: Address | null) {
     try {
       const code = await publicClient.getCode({ address: safe })
       if (!code || code === '0x') throw new Error('No contract code at this address on the selected network.')
-      const [version, owners, threshold, nonce] = await Promise.all([
+      const [slot0, version, owners, threshold, nonce] = await Promise.all([
+        publicClient.getStorageAt({ address: safe, slot: SAFE_MASTER_COPY_SLOT }),
         publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'VERSION' }),
         publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'getOwners' }),
         publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'getThreshold' }),
         publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' }),
       ])
+      // Code alone proves nothing: any contract can answer VERSION/getOwners with a
+      // made-up owner set. Slot 0 names the singleton, so it is what makes this a Safe.
+      const masterCopy = slot0 && slot0 !== '0x' ? (`0x${slot0.slice(-40)}` as Address) : null
+      const problem = safeIdentityProblem({ masterCopy, version })
+      if (problem) throw new Error(problem)
       if (run === latest.current) setInfo({ version, owners: [...owners], threshold, nonce })
     } catch (e) {
       if (run === latest.current) setError(errorMessage(e))

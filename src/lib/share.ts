@@ -1,4 +1,5 @@
 import { getAddress, isAddress, type Address, type Hex } from 'viem'
+import { assertSignature, isBytes } from './safe'
 import { parsePending, type PendingTx } from './storage'
 
 /** A single owner approval, small enough to paste into a chat message. */
@@ -15,6 +16,8 @@ export type ShareLink = {
   chainId?: number
   txs?: PendingTx[]
   sig?: SignatureShare
+  /** The link named a Safe/chain that its transactions do not belong to. */
+  mismatch?: boolean
 }
 
 /** Percent-free base64url of a UTF-8 string. */
@@ -52,16 +55,18 @@ function assertSignatureShare(value: unknown): SignatureShare {
   if (
     !share ||
     typeof share !== 'object' ||
-    typeof share.id !== 'string' ||
-    !share.id.startsWith('0x') ||
+    !isBytes(share.id, 32) ||
     typeof share.owner !== 'string' ||
     !isAddress(share.owner) ||
-    typeof share.signature !== 'string' ||
-    !share.signature.startsWith('0x')
+    !isBytes(share.signature, 65)
   ) {
     throw new Error('Unrecognised signature')
   }
-  return { id: share.id as Hex, owner: getAddress(share.owner), signature: share.signature as Hex }
+  return {
+    id: share.id as Hex,
+    owner: getAddress(share.owner),
+    signature: assertSignature(share.signature),
+  }
 }
 
 /** Encode a single signature as a compact, paste-friendly code. */
@@ -143,9 +148,24 @@ export function readShareLink(): ShareLink {
     }
   }
 
+  // A link that names one Safe (or network) while carrying transactions for another
+  // is inconsistent. Keep the payload — it is hash-bound and re-verified on import —
+  // and drop the decoration, flagging the link.
+  const first = link.txs?.[0]
+  if (first) {
+    if (link.safe && link.safe.toLowerCase() !== first.safe.toLowerCase()) {
+      link.mismatch = true
+      link.safe = undefined
+    }
+    if (link.chainId && link.chainId !== first.chainId) {
+      link.mismatch = true
+      link.chainId = undefined
+    }
+  }
+
   // Fall back to the address/chain carried inside the transaction payload.
-  if (!link.safe && link.txs?.[0]) link.safe = link.txs[0].safe
-  if (!link.chainId && link.txs?.[0]) link.chainId = link.txs[0].chainId
+  if (!link.safe && first) link.safe = first.safe
+  if (!link.chainId && first) link.chainId = first.chainId
   return link
 }
 

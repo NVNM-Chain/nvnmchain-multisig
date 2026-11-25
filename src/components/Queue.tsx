@@ -17,7 +17,7 @@ import { txRisks } from '../lib/decode'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
 import { markExecuted, mergeSignature, rebasePending, removePending, type PendingTx } from '../lib/storage'
-import { send, type Wallet } from '../lib/wallet'
+import { send, assertOnCorrectChain, type Wallet } from '../lib/wallet'
 import { Notice, TxLink } from './ui'
 import { TransactionReview, TxTitle } from './TransactionReview'
 
@@ -131,6 +131,7 @@ function QueuedTxCard({
   const sign = () =>
     run('sign', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      assertOnCorrectChain(wallet)
       await assertNotDead('Signing')
       await assertSafeTxHash(wallet.publicClient, safe, tx, item.id)
       const typed = safeTxTypedData(wallet.chainId, safe, tx)

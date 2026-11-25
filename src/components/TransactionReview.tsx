@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { formatUnits, type Address, type Hex, type PublicClient } from 'viem'
-import { shortAddress } from '../chain'
+import { FEE_TOKEN, shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import { readSafeTxHash } from '../lib/coordinate'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
@@ -51,20 +51,31 @@ function describe(decoded: DecodedWithAbi | null, selector: Hex, meta: TokenMeta
   return `${name}(${args.map(formatArg).join(', ')})`
 }
 
-/** Decode a call with the registered ABIs; for a token call, also load the token. */
+/**
+ * Decode a call with the registered ABIs. Token metadata (`symbol`, `decimals`) is
+ * only read for a token we know by address — the fee token or an interface bound to
+ * that target — because any contract can report whatever metadata it likes for a
+ * selector that merely looks like `transfer(address,uint256)`.
+ */
 function useDecoded(publicClient: PublicClient, abis: readonly AbiEntry[], call: PackedCall | undefined) {
   const decoded = useMemo(() => (call ? decodeWithAbis(abis, call.to, call.data) : null), [abis, call])
-  const isToken = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name)
-  const meta = useTokenMeta(publicClient, call && isToken ? call.to : null)
-  return { decoded, meta }
+  const bound = Boolean(
+    decoded?.entry.address && call && decoded.entry.address.toLowerCase() === call.to.toLowerCase(),
+  )
+  const trustedToken = Boolean(call) && (bound || call!.to.toLowerCase() === FEE_TOKEN.toLowerCase())
+  const isToken = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name) && trustedToken
+  const meta = useTokenMeta(publicClient, isToken ? call!.to : null)
+  return { decoded, meta, verified: bound || isToken }
 }
 
 /** One-line title of a Safe transaction, read from its calldata. */
 export function TxTitle({ publicClient, abis, tx }: { publicClient: PublicClient; abis: readonly AbiEntry[]; tx: SafeTxParams }) {
   const { batch, calls } = useMemo(() => callsOf(tx), [tx])
-  const { decoded, meta } = useDecoded(publicClient, abis, batch ? undefined : calls[0])
+  const { decoded, meta, verified } = useDecoded(publicClient, abis, batch ? undefined : calls[0])
   if (batch) return `${calls.length} calls (MultiSend)`
-  if (decoded) return describe(decoded, selectorOf(tx.data), meta)
+  // A selector-only match is a guess about an unknown contract; say so.
+  const suffix = verified ? '' : ' (unverified interface)'
+  if (decoded) return `${describe(decoded, selectorOf(tx.data), meta)}${suffix}`
   return `${tx.operation === 1 ? 'Delegatecall' : 'Call'} ${shortAddress(tx.to, 4)}`
 }
 
@@ -136,16 +147,24 @@ function CallRow({
   call,
   index,
   total,
+  packed,
 }: {
   publicClient: PublicClient
   abis: readonly AbiEntry[]
   call: PackedCall
   index: number
   total: number
+  /** True when this entry is inside a MultiSend blob (where the operation byte is ignored). */
+  packed: boolean
 }) {
   const { decoded, meta } = useDecoded(publicClient, abis, call)
   const selector = selectorOf(call.data)
   const summary = useMemo(() => describe(decoded, selector, meta), [decoded, selector, meta])
+  const operation = packed
+    ? 'call (MultiSendCallOnly ignores the operation byte)'
+    : call.operation === 1
+      ? 'delegatecall'
+      : 'call'
 
   return (
     <div className="tx-call">
@@ -159,7 +178,7 @@ function CallRow({
           <AddressLink address={call.to} short={false} />
         </dd>
         <dt>operation</dt>
-        <dd>{call.operation === 1 ? 'delegatecall' : 'call'}</dd>
+        <dd>{operation}</dd>
         {decoded && (
           <>
             <dt>function</dt>
@@ -233,6 +252,13 @@ export function TransactionReview({
         {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
       </div>
 
+      {batch && tx.value > 0n && (
+        <Notice kind="warn">
+          This batch carries <span className="mono">{tx.value.toString()}</span> wei with the delegatecall to
+          MultiSendCallOnly, which keeps it rather than forwarding it to the calls.
+        </Notice>
+      )}
+
       <dl className="kv" style={{ margin: '8px 0' }}>
         <HashRow
           label="safeTxHash"
@@ -261,7 +287,15 @@ export function TransactionReview({
       )}
 
       {calls.map((call, index) => (
-        <CallRow key={index} publicClient={publicClient} abis={abis} call={call} index={index} total={calls.length} />
+        <CallRow
+          key={index}
+          publicClient={publicClient}
+          abis={abis}
+          call={call}
+          index={index}
+          total={calls.length}
+          packed={batch}
+        />
       ))}
 
       <details style={{ marginTop: 10 }}>

@@ -11,12 +11,15 @@ import {
   encodeSafeSetup,
   executionSucceeded,
   nextFreeNonce,
+  normalizeSignatureV,
   packMultiSend,
   packSignatures,
   preApprovedSignature,
   predictSafeAddress,
   recoverSigner,
   safeDomainSeparator,
+  safeIdentityProblem,
+  SAFE_MASTER_COPY_SLOT,
   safeTxStructHash,
   safeTxTypedData,
   serializeTx,
@@ -116,6 +119,12 @@ const safe = ('0x' + proxyLog.data.slice(26, 66)) as `0x${string}`
 check('predictSafeAddress == factory proxy', predicted.toLowerCase() === safe.toLowerCase(), `${predicted} / ${safe}`)
 const owners = await pub.readContract({ address: safe, abi: safeAbi, functionName: 'getOwners' })
 check('proxy owners/threshold', owners.length === 1 && owners[0]!.toLowerCase() === account.address.toLowerCase() && (await pub.readContract({ address: safe, abi: safeAbi, functionName: 'getThreshold' })) === 1n)
+// The identity check the UI runs on load depends on slot 0 naming the singleton.
+const proxySlot0 = await pub.getStorageAt({ address: safe, slot: SAFE_MASTER_COPY_SLOT })
+check(
+  'proxy slot 0 is the singleton (what the identity check reads)',
+  Boolean(proxySlot0) && (`0x${(proxySlot0 as string).slice(-40)}`).toLowerCase() === safeL2.toLowerCase(),
+)
 
 // --- single transaction: hash + sign + execute ---
 const tx: SafeTxParams = {
@@ -307,6 +316,59 @@ check(
     () => false,
     () => true,
   ),
+)
+
+// --- hardened imports: signature length, chain id, link consistency, Safe identity ---
+const shortSig = ('0x' + '11'.repeat(64)) as `0x${string}` // EIP-2098 style, not r‖s‖v
+check('packSignatures refuses a signature that is not 65 bytes', throws(() => packSignatures([{ owner: account.address, signature: shortSig }])))
+check('normalizeSignatureV refuses a signature that is not 65 bytes', throws(() => normalizeSignatureV(shortSig)))
+check(
+  'a signature code with a short signature or a short hash is refused',
+  throws(() => decodeSignatureShare(encodeSignatureShare({ ...shareSig, signature: shortSig }))) &&
+    throws(() => decodeSignatureShare(encodeSignatureShare({ ...shareSig, id: '0x1234' as `0x${string}` }))),
+)
+check(
+  'imports refuse a non-positive chain id',
+  throws(() => decodeShare(encodeShare([{ ...sample, chainId: 0 }]))) &&
+    throws(() => decodeShare(encodeShare([{ ...sample, chainId: -1 }]))),
+)
+loc.hash = `#safe=${secondOwner}&chain=31337&txs=${encodeShare([sample])}`
+const foreignSafe = readShareLink()
+check(
+  'a link naming a Safe its transactions do not belong to is flagged',
+  foreignSafe.mismatch === true && foreignSafe.safe?.toLowerCase() === sample.safe.toLowerCase(),
+)
+loc.hash = `#safe=${sample.safe}&chain=1&txs=${encodeShare([sample])}`
+const foreignChain = readShareLink()
+check(
+  'a link naming another network than its transactions is flagged',
+  foreignChain.mismatch === true && foreignChain.chainId === 31337,
+)
+check(
+  'only a Safe v1.3.0 proxy passes the identity check',
+  safeIdentityProblem({ masterCopy: SAFE_ADDRESSES.safeL2, version: '1.3.0' }) === null &&
+    safeIdentityProblem({ masterCopy: secondOwner, version: '1.3.0' }) !== null &&
+    safeIdentityProblem({ masterCopy: SAFE_ADDRESSES.safeL2, version: '1.4.1' }) !== null &&
+    safeIdentityProblem({ masterCopy: null, version: '1.3.0' }) !== null,
+)
+
+// --- a batch must not describe something MultiSendCallOnly will not do ---
+const opByteBatch = {
+  ...batchTx,
+  data: encodeFunctionData({
+    abi: multiSendCallOnlyAbi,
+    functionName: 'multiSend',
+    // flip the first entry's operation byte from call (0) to delegatecall (1)
+    args: [`0x01${packMultiSend([{ to: '0x000000000000000000000000000000000000dEaD', value: 0n, data: '0x' }]).slice(4)}`],
+  }),
+}
+check(
+  'a batch that sets the operation MultiSendCallOnly ignores is flagged',
+  txRisks(opByteBatch).some((risk) => risk.startsWith('Operation byte')),
+)
+check(
+  'a batch carrying value with its delegatecall is flagged',
+  txRisks({ ...batchTx, value: 1n }).some((risk) => risk.startsWith('Value')),
 )
 
 // --- queueing the same transaction again must keep its signatures ---

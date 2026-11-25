@@ -79,9 +79,24 @@ export type Wallet = {
   setNetworkKey: (key: NetworkKey) => void
 }
 
+const wrongChainMessage = (wallet: Wallet) =>
+  wallet.walletChainId === null
+    ? `Your wallet's network could not be confirmed; open the wallet, switch it to ${chainFor(wallet.networkKey).name} and try again.`
+    : `Your wallet is on chain ${wallet.walletChainId}, but this app is on ${chainFor(wallet.networkKey).name} (chain ${wallet.chainId}). Switch the wallet's network first.`
+
+/**
+ * Refuse to use the wallet unless it is on the network the app is reading.
+ * Safe addresses are identical on every NVNM network, so a wallet left on
+ * another chain would sign for one network and broadcast on another.
+ */
+export function assertOnCorrectChain(wallet: Wallet): void {
+  if (!wallet.onCorrectChain) throw new Error(wrongChainMessage(wallet))
+}
+
 /** Send a call with `gasToSend` of the node's estimate as its gas, so the wallet does not pad it. */
 export async function send(wallet: Wallet, call: { to: Address; data: Hex }): Promise<Hex> {
   if (!wallet.walletClient || !wallet.account) throw new Error('Connect a wallet first.')
+  assertOnCorrectChain(wallet)
   const request = { account: wallet.account, ...call }
   const gas = gasToSend(await wallet.publicClient.estimateGas(request))
   return wallet.walletClient.sendTransaction({ ...request, chain: chainFor(wallet.networkKey), gas })

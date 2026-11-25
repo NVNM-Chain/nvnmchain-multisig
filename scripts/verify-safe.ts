@@ -45,6 +45,7 @@ import {
   readShareLink,
 } from '../src/lib/share'
 import { assertSafeIdentity, assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
+import { assertOnCorrectChain } from '../src/lib/wallet'
 import { decodeMultiSend, isMultiSendCall, nativeValueProblem, txRisks } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
 import { loadPending, rebasePending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
@@ -395,6 +396,24 @@ check(
     () => false,
     (e: unknown) => String(e).includes('not a Safe proxy'),
   ),
+)
+
+// --- the chain guard reads the wallet, not a React snapshot ---
+type ChainWallet = Parameters<typeof assertOnCorrectChain>[0]
+const fakeWallet = (snapshot: number | null, reported: string): ChainWallet =>
+  ({
+    provider: { request: async ({ method }: { method: string }) => (method === 'eth_chainId' ? reported : null) },
+    chainId: 787223, // the app's network (NVNM testnet)
+    walletChainId: snapshot, // what React state would have shown
+    networkKey: 'testnet',
+  }) as unknown as ChainWallet
+const passesChain = (w: ChainWallet) => assertOnCorrectChain(w).then(() => true, () => false)
+check(
+  'the chain guard asks the wallet, not the snapshot it captured earlier',
+  (await passesChain(fakeWallet(787223, '0xc0317'))) && // both agree
+    (await passesChain(fakeWallet(1, '0xc0317'))) && // stale snapshot is ignored
+    !(await passesChain(fakeWallet(787223, '0x1'))) && // wallet moved away: refused
+    !(await passesChain(fakeWallet(787223, 'garbage'))), // unreadable: fails closed
 )
 
 // --- a batch must not describe something MultiSendCallOnly will not do ---

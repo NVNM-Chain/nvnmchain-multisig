@@ -220,7 +220,7 @@ export function NewTransaction({
       if (iAmOwner) {
         // The digest is built for the app's network; a wallet on another one would
         // be asked to sign for a chain it cannot broadcast to.
-        assertOnCorrectChain(wallet)
+        await assertOnCorrectChain(wallet)
         const typed = safeTxTypedData(wallet.chainId, safe, safeTx)
         const rawSignature = await wallet.walletClient.signTypedData({
           account: wallet.account,

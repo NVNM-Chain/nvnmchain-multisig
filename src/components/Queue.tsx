@@ -133,7 +133,7 @@ function QueuedTxCard({
       if (!wallet.walletClient || !wallet.account) return
       const dead = nativeValueProblem(tx)
       if (dead) throw new Error(dead)
-      assertOnCorrectChain(wallet)
+      await assertOnCorrectChain(wallet)
       await assertNotDead('Signing')
       await assertSafeTxHash(wallet.publicClient, safe, tx, item.id)
       const typed = safeTxTypedData(wallet.chainId, safe, tx)

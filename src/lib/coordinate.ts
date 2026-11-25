@@ -1,8 +1,57 @@
-import type { Address, Hex, PublicClient } from 'viem'
+import { keccak256, type Address, type Hex, type PublicClient } from 'viem'
 import { safeAbi } from './abi'
-import { normalizeSignatureV, recoverSigner, type SafeTxParams } from './safe'
+import { SAFE_ADDRESSES } from './safeArtifacts'
+import { SAFE_MASTER_COPY_SLOT, normalizeSignatureV, proxyRuntimeProblem, recoverSigner, safeIdentityProblem, type SafeTxParams } from './safe'
 import { loadPending, mergeSignature, savePending, type PendingTx } from './storage'
 import type { SignatureShare } from './share'
+
+/**
+ * The singleton's runtime code never changes, so its hash is read once per client
+ * (a new client is created per network).
+ */
+const singletonCodeHashes = new WeakMap<PublicClient, Promise<Hex | null>>()
+
+function singletonCodeHash(publicClient: PublicClient): Promise<Hex | null> {
+  const cached = singletonCodeHashes.get(publicClient)
+  if (cached) return cached
+  const read = publicClient
+    .getCode({ address: SAFE_ADDRESSES.safeL2 })
+    .then((code) => (code && code !== '0x' ? keccak256(code) : null))
+    .catch(() => null)
+  singletonCodeHashes.set(publicClient, read)
+  return read
+}
+
+/**
+ * Refuse an address that is not a Safe v1.3.0 proxy over the official SafeL2
+ * singleton, and return its reported version.
+ *
+ * Nothing the address *says* is trusted before its runtime code is known to be
+ * SafeProxy: a lookalike can put the SafeL2 address in slot 0, answer `VERSION()`
+ * with 1.3.0 and fabricate owners and transaction hashes, so a check built on those
+ * answers would pass. The code hash is the part it cannot forge — which is why slot
+ * 0 is only read once the code matches, and the singleton is only trusted once its
+ * own code matches.
+ */
+export async function assertSafeIdentity(
+  publicClient: PublicClient,
+  address: Address,
+): Promise<{ version: string; masterCopy: Address }> {
+  const code = await publicClient.getCode({ address })
+  const proxyCodeHash = code ? keccak256(code) : null
+  const runtime = proxyRuntimeProblem(proxyCodeHash)
+  if (runtime) throw new Error(runtime)
+
+  const [slot0, version, singleton] = await Promise.all([
+    publicClient.getStorageAt({ address, slot: SAFE_MASTER_COPY_SLOT }),
+    publicClient.readContract({ address, abi: safeAbi, functionName: 'VERSION' }),
+    singletonCodeHash(publicClient),
+  ])
+  const masterCopy = (slot0 && slot0 !== '0x' ? `0x${slot0.slice(-40)}` : null) as Address | null
+  const problem = safeIdentityProblem({ proxyCodeHash, masterCopy, version, singletonCodeHash: singleton })
+  if (problem) throw new Error(problem)
+  return { version, masterCopy: masterCopy as Address }
+}
 
 /** The SafeTx hash as the Safe itself computes it. */
 export function readSafeTxHash(publicClient: PublicClient, safe: Address, tx: SafeTxParams): Promise<Hex> {

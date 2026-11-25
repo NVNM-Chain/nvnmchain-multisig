@@ -3,6 +3,7 @@ import { encodeFunctionData, getAddress, isAddress, type Address } from 'viem'
 import { errorMessage } from '../chain'
 import { send, type Wallet } from '../lib/wallet'
 import { SAFE_ADDRESSES, encodeSafeSetup, predictSafeAddress } from '../lib/safe'
+import { assertSafeIdentity } from '../lib/coordinate'
 import { safeAbi, safeProxyFactoryAbi } from '../lib/abi'
 import type { TrackedSafe } from '../lib/storage'
 import { AddressLink, Field, Notice } from './ui'
@@ -92,7 +93,10 @@ export function SafePicker({
         throw new Error(`The Safe was not deployed — transaction ${hash}.`)
       }
       // The proxy address commits to the initializer only through the salt, so read
-      // the deployed state back instead of trusting the factory to have set it up.
+      // the deployed state back instead of trusting the factory to have set it up —
+      // and check the code first, since a proxy is only a Safe if it delegates to the
+      // official singleton.
+      await assertSafeIdentity(wallet.publicClient, predicted)
       const [deployedOwners, deployedThreshold] = await Promise.all([
         wallet.publicClient.readContract({ address: predicted, abi: safeAbi, functionName: 'getOwners' }),
         wallet.publicClient.readContract({ address: predicted, abi: safeAbi, functionName: 'getThreshold' }),

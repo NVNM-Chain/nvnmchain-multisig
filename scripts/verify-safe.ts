@@ -4,7 +4,12 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { foundry } from 'viem/chains'
 import { gasToSend, parseUnits, TX_GAS_CAP } from '../src/chain'
 import { multiSendCallOnlyAbi, safeAbi, safeProxyFactoryAbi } from '../src/lib/abi'
-import { SAFE_ADDRESSES, SAFE_CREATION_CODE } from '../src/lib/safeArtifacts'
+import {
+  SAFE_ADDRESSES,
+  SAFE_CREATION_CODE,
+  SAFE_L2_RUNTIME_HASH,
+  SAFE_PROXY_RUNTIME_HASH,
+} from '../src/lib/safeArtifacts'
 import {
   buildSafeTx,
   computeSafeTxHash,
@@ -15,6 +20,7 @@ import {
   packMultiSend,
   packSignatures,
   preApprovedSignature,
+  proxyRuntimeProblem,
   predictSafeAddress,
   recoverSigner,
   safeDomainSeparator,
@@ -38,7 +44,7 @@ import {
   parseSignatureShare,
   readShareLink,
 } from '../src/lib/share'
-import { assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
+import { assertSafeIdentity, assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
 import { decodeMultiSend, isMultiSendCall, txRisks } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
 import { loadPending, rebasePending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
@@ -124,6 +130,13 @@ const proxySlot0 = await pub.getStorageAt({ address: safe, slot: SAFE_MASTER_COP
 check(
   'proxy slot 0 is the singleton (what the identity check reads)',
   Boolean(proxySlot0) && (`0x${(proxySlot0 as string).slice(-40)}`).toLowerCase() === safeL2.toLowerCase(),
+)
+// The identity anchor: the proxy's runtime code, which a lookalike cannot forge.
+const proxyRuntimeHash = keccak256((await pub.getCode({ address: safe }))!)
+check('deployed proxy runtime is SafeProxy (pinned constant)', proxyRuntimeHash === SAFE_PROXY_RUNTIME_HASH, proxyRuntimeHash)
+check(
+  'bundled SafeL2 runtime matches the pinned constant',
+  keccak256((await pub.getCode({ address: safeL2 }))!) === SAFE_L2_RUNTIME_HASH,
 )
 
 // --- single transaction: hash + sign + execute ---
@@ -344,12 +357,44 @@ check(
   'a link naming another network than its transactions is flagged',
   foreignChain.mismatch === true && foreignChain.chainId === 31337,
 )
+const impostorRuntime = keccak256((await pub.getCode({ address: multiSendLocal }))!)
+const forgedAnswers = {
+  // everything a lookalike would answer to look like a Safe
+  masterCopy: SAFE_ADDRESSES.safeL2,
+  version: '1.3.0',
+  singletonCodeHash: SAFE_L2_RUNTIME_HASH,
+}
 check(
-  'only a Safe v1.3.0 proxy passes the identity check',
-  safeIdentityProblem({ masterCopy: SAFE_ADDRESSES.safeL2, version: '1.3.0' }) === null &&
-    safeIdentityProblem({ masterCopy: secondOwner, version: '1.3.0' }) !== null &&
-    safeIdentityProblem({ masterCopy: SAFE_ADDRESSES.safeL2, version: '1.4.1' }) !== null &&
-    safeIdentityProblem({ masterCopy: null, version: '1.3.0' }) !== null,
+  'a real proxy over the official singleton passes the identity check',
+  safeIdentityProblem({ proxyCodeHash: SAFE_PROXY_RUNTIME_HASH, ...forgedAnswers }) === null,
+)
+check(
+  'a lookalike answering slot 0 = SafeL2 and version 1.3.0 is refused on its code',
+  safeIdentityProblem({ ...forgedAnswers, proxyCodeHash: impostorRuntime }) !== null &&
+    proxyRuntimeProblem(impostorRuntime) !== null,
+)
+check(
+  'a proxy over a non-official singleton is refused',
+  safeIdentityProblem({ ...forgedAnswers, proxyCodeHash: SAFE_PROXY_RUNTIME_HASH, masterCopy: secondOwner }) !== null,
+)
+check(
+  'a proxy whose singleton is not the official bytecode is refused',
+  safeIdentityProblem({
+    ...forgedAnswers,
+    proxyCodeHash: SAFE_PROXY_RUNTIME_HASH,
+    singletonCodeHash: impostorRuntime,
+  }) !== null,
+)
+check(
+  'a Safe reporting another version is refused',
+  safeIdentityProblem({ ...forgedAnswers, proxyCodeHash: SAFE_PROXY_RUNTIME_HASH, version: '1.4.1' }) !== null,
+)
+check(
+  'assertSafeIdentity refuses an address that is not a proxy, before reading slot 0',
+  await assertSafeIdentity(pub, multiSendLocal).then(
+    () => false,
+    (e: unknown) => String(e).includes('not a Safe proxy'),
+  ),
 )
 
 // --- a batch must not describe something MultiSendCallOnly will not do ---

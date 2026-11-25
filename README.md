@@ -150,11 +150,17 @@ src/
 ## Security
 
 - **Testnet software, unaudited.** Use at your own risk.
-- **The app only operates real Safe v1.3.0 proxies.** Loading an address reads
-  slot 0 (`masterCopy`) and `VERSION()`; a contract that merely answers
-  `getOwners()`/`getThreshold()` is refused, so a shared link cannot dress up a
-  lookalike contract as your Safe. The Safe is not added to your list unless you
-  press *Remember*, and an unlisted Safe is flagged in the dashboard.
+- **The app only operates real Safe v1.3.0 proxies, verified by bytecode.** Loading an
+  address checks `keccak256(getCode(addr))` against the SafeProxy runtime (every Safe
+  proxy carries the same 171-byte runtime — slot 0 plus a delegatecall forwarder — so
+  its hash is an identity, not a claim), then that slot 0 names the official SafeL2
+  singleton, and that the singleton's own runtime matches SafeL2. What the address
+  *answers* (`VERSION()`, `getOwners()`, `getTransactionHash()`) is checked last on
+  purpose: a lookalike contract can store the SafeL2 address in slot 0 and report
+  version 1.3.0, so answers alone would let it collect signatures. The two runtime
+  hashes are pinned in `src/lib/safeArtifacts.ts` and re-derived from real deployments
+  by `scripts/verify-safe.ts`. A Safe is not added to your list unless you press
+  *Remember*, and an unlisted Safe is flagged in the dashboard.
 - **A Safe address is not unique across networks.** The same address exists on
   mainnet, testnet and canary with a possibly different owner set. A link that
   names another network is offered, never applied silently, and every signature

@@ -13,7 +13,7 @@ import {
   type Address,
   type Hex,
 } from 'viem'
-import { SAFE_ADDRESSES, SAFE_CREATION_CODE, SAFE_VERSION, CREATE2_FACTORY } from './safeArtifacts'
+import { SAFE_ADDRESSES, SAFE_CREATION_CODE, SAFE_L2_RUNTIME_HASH, SAFE_PROXY_RUNTIME_HASH, SAFE_VERSION, CREATE2_FACTORY } from './safeArtifacts'
 import { multiSendCallOnlyAbi, safeAbi } from './abi'
 import type { StoredTx } from './storage'
 
@@ -314,26 +314,60 @@ export function executionSucceeded(safe: Address, logs: readonly { address: Addr
 export const SAFE_MASTER_COPY_SLOT = `0x${'00'.repeat(32)}` as Hex
 
 /**
- * Why an address is not a Safe v1.3.0 proxy, or `null` when it is one.
+ * Why `codeHash` is not the SafeProxy runtime, or `null` when it is.
  *
- * Callers read slot 0 and `VERSION()`; both are attacker-controlled for any
- * other contract, so the pair is what separates a real Safe from a lookalike
- * that merely answers `getOwners()`/`getThreshold()`.
+ * This is the one check a lookalike cannot satisfy by behaviour: it would need
+ * bytecode that hashes to the same value. Everything else such a contract returns
+ * — `VERSION()`, `getOwners()`, `getThreshold()`, `getTransactionHash()` — is
+ * whatever it chooses to say.
  */
-export function safeIdentityProblem(input: {
-  masterCopy: string | null | undefined
-  version: string | null | undefined
-}): string | null {
+export function proxyRuntimeProblem(codeHash: string | null | undefined): string | null {
+  if (!codeHash) return 'No contract code at this address on the selected network.'
+  if (codeHash.toLowerCase() !== SAFE_PROXY_RUNTIME_HASH.toLowerCase()) {
+    return (
+      'This address is not a Safe proxy: its runtime code is not SafeProxy, so everything it ' +
+      'reports (version, owners, threshold, transaction hash) would be whatever it chose to say.'
+    )
+  }
+  return null
+}
+
+/** What was read from an address that claims to be a Safe. */
+export type SafeIdentityFacts = {
+  /** keccak256 of the code at the address. */
+  proxyCodeHash?: string | null
+  /** Singleton read from slot 0. */
+  masterCopy?: string | null
+  /** `VERSION()` as reported by the address. */
+  version?: string | null
+  /** keccak256 of the code at `SAFE_ADDRESSES.safeL2`. */
+  singletonCodeHash?: string | null
+}
+
+/**
+ * Why an address is not a Safe v1.3.0 proxy over the official SafeL2 singleton,
+ * or `null` when it is.
+ *
+ * Order matters: the proxy runtime is checked first (it is the only fact a
+ * lookalike cannot fabricate), then the singleton it delegates to, then the
+ * singleton's own runtime, and only then the answers it gave.
+ */
+export function safeIdentityProblem(facts: SafeIdentityFacts): string | null {
+  const runtime = proxyRuntimeProblem(facts.proxyCodeHash)
+  if (runtime) return runtime
   const expected = SAFE_ADDRESSES.safeL2.toLowerCase()
-  const actual = input.masterCopy?.toLowerCase()
+  const actual = facts.masterCopy?.toLowerCase()
   if (!actual || actual === ZERO_ADDRESS) {
     return `This address is not a Safe proxy: its singleton slot is empty (expected SafeL2 ${SAFE_ADDRESSES.safeL2}).`
   }
   if (actual !== expected) {
-    return `This address is not a Safe v1.3.0 proxy: its singleton is ${input.masterCopy}, but this app only operates the SafeL2 singleton ${SAFE_ADDRESSES.safeL2}.`
+    return `This address is not a Safe v1.3.0 proxy: its singleton is ${facts.masterCopy}, but this app only operates the SafeL2 singleton ${SAFE_ADDRESSES.safeL2}.`
   }
-  if (input.version !== SAFE_VERSION) {
-    return `This Safe reports version ${input.version ?? '(unknown)'}; this app only signs for Safe v${SAFE_VERSION}.`
+  if ((facts.singletonCodeHash ?? '').toLowerCase() !== SAFE_L2_RUNTIME_HASH.toLowerCase()) {
+    return `The singleton at ${SAFE_ADDRESSES.safeL2} is not the official SafeL2 bytecode, so what it does cannot be trusted.`
+  }
+  if (facts.version !== SAFE_VERSION) {
+    return `This Safe reports version ${facts.version ?? '(unknown)'}; this app only signs for Safe v${SAFE_VERSION}.`
   }
   return null
 }

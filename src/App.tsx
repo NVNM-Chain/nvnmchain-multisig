@@ -143,9 +143,9 @@ export default function App() {
       {link.mismatch && (
         <div style={{ marginBottom: 16 }}>
           <Notice kind="err">
-            This link names a different Safe (or network) than the transactions it carries. The
-            transactions were kept and the address in the link was ignored — check the sender before
-            signing either.
+            This link carries transactions that do not belong to the Safe and network it names
+            {link.skipped ? ` — ${link.skipped} of them were ignored` : ''}. Only the ones matching
+            the Safe below were kept; ask the sender for a link per Safe.
           </Notice>
         </div>
       )}

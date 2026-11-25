@@ -346,17 +346,62 @@ check(
   throws(() => decodeShare(encodeShare([{ ...sample, chainId: 0 }]))) &&
     throws(() => decodeShare(encodeShare([{ ...sample, chainId: -1 }]))),
 )
+const otherSafeTx: PendingTx = {
+  id: computeSafeTxHash(31337n, secondOwner, tx2),
+  chainId: 31337,
+  safe: secondOwner,
+  createdAt: Date.now(),
+  tx: serializeTx(tx2),
+  signatures: {},
+}
+const otherChainTx: PendingTx = {
+  id: computeSafeTxHash(1n, safe, tx2),
+  chainId: 1,
+  safe,
+  createdAt: Date.now(),
+  tx: serializeTx(tx2),
+  signatures: {},
+}
 loc.hash = `#safe=${secondOwner}&chain=31337&txs=${encodeShare([sample])}`
 const foreignSafe = readShareLink()
 check(
-  'a link naming a Safe its transactions do not belong to is flagged',
-  foreignSafe.mismatch === true && foreignSafe.safe?.toLowerCase() === sample.safe.toLowerCase(),
+  'a link naming a Safe its transactions do not belong to imports nothing',
+  foreignSafe.mismatch === true &&
+    foreignSafe.skipped === 1 &&
+    foreignSafe.txs?.length === 0 &&
+    foreignSafe.safe?.toLowerCase() === secondOwner.toLowerCase(),
 )
 loc.hash = `#safe=${sample.safe}&chain=1&txs=${encodeShare([sample])}`
 const foreignChain = readShareLink()
 check(
-  'a link naming another network than its transactions is flagged',
-  foreignChain.mismatch === true && foreignChain.chainId === 31337,
+  'a link naming another network than its transactions imports nothing',
+  foreignChain.mismatch === true && foreignChain.chainId === 1 && foreignChain.txs?.length === 0,
+)
+// The gap this closes: a payload that *starts* consistent and appends another Safe.
+loc.hash = `#safe=${sample.safe}&chain=31337&txs=${encodeShare([sample, otherSafeTx])}`
+const mixedPayload = readShareLink()
+check(
+  'every entry is checked, not just the first: a trailing foreign Safe is dropped',
+  mixedPayload.mismatch === true &&
+    mixedPayload.skipped === 1 &&
+    mixedPayload.txs?.length === 1 &&
+    mixedPayload.txs[0]!.id === sample.id,
+)
+loc.hash = `#safe=${sample.safe}&chain=0&txs=${encodeShare([sample])}`
+const zeroChain = readShareLink()
+check(
+  'a nonsensical chain in the link cannot switch the check off',
+  zeroChain.mismatch === true && zeroChain.txs?.length === 0,
+)
+loc.hash = `#txs=${encodeShare([sample, otherChainTx])}`
+const undecorated = readShareLink()
+check(
+  'a mixed payload is flagged even when the link names no Safe or network',
+  undecorated.mismatch === true &&
+    undecorated.skipped === 1 &&
+    undecorated.txs?.length === 1 &&
+    undecorated.chainId === 31337 &&
+    undecorated.safe?.toLowerCase() === sample.safe.toLowerCase(),
 )
 const impostorRuntime = keccak256((await pub.getCode({ address: multiSendLocal }))!)
 const forgedAnswers = {

@@ -188,8 +188,10 @@ src/
   batch that sets it is flagged. A gas refund denominated in the native currency
   cannot be paid on this chain and is flagged as a failing execution.
 - Imports are strict: a queued transaction must hash to its own `id`, every
-  signature must be 65 bytes and recover to the owner it names, and a link whose
-  Safe/network disagrees with the transactions it carries is flagged.
+  signature must be 65 bytes and recover to the owner it names, and every transaction
+  a link carries must belong to the Safe and network it names. Mixed payloads are
+  flagged and the foreign entries are ignored — including links that name nothing,
+  where the first entry defines the Safe the rest must match.
 - `*.github.io` is one origin for all of an account's Pages projects, so they share
   this app's `localStorage`. Serve it from its own domain to keep the queue private.
 - The page ships a CSP (`index.html`) without `unsafe-eval`, and refuses to render

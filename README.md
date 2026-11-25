@@ -15,8 +15,8 @@ bulletin board; this one does without.
 
 | | |
 | --- | --- |
-| **Network** | NVNM Testnet · chain id `787223` |
-| **RPC** | `https://rpc.nvnm.testnet.nvnmchain.io` |
+| **Networks** | NVNM Mainnet · `7872` · `https://rpc.nvnm.mainnet.nvnmchain.io` (`wss://rpc.nvnm.mainnet.nvnmchain.io`)<br>NVNM Testnet · `787223` · `https://rpc.nvnm.testnet.nvnmchain.io`<br>NVNM Canary · `787222` · `https://rpc.nvnm.canary.mantrachain.dev` |
+| **RPC** | pick the network in the header; default is `https://rpc.nvnm.testnet.nvnmchain.io` |
 | **Fees** | paid in the TIP-20 fee token (`nUSD` on testnet, `pathUSD` on canary) — NVNM has no native gas token |
 | **Safe** | v1.3.0 (SafeL2 singleton) at the official **eip155** addresses |
 

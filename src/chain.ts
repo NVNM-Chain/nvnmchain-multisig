@@ -9,11 +9,22 @@ import { defineChain, formatUnits as viemFormatUnits } from 'viem'
  * token, default to `pathUSD` (`0x20c0…0000`).
  */
 export const NETWORKS = {
+  mainnet: {
+    key: 'mainnet',
+    name: 'NVNM Mainnet',
+    chainId: 7872,
+    rpcUrl: 'https://rpc.nvnm.mainnet.nvnmchain.io',
+    wsUrl: 'wss://rpc.nvnm.mainnet.nvnmchain.io',
+    explorerUrl: 'https://explorer.nvnm.mainnet.nvnmchain.io',
+    explorerName: 'nvnmchain Mainnet Explorer',
+    feeTokenSymbol: 'nUSD',
+  },
   testnet: {
     key: 'testnet',
     name: 'NVNM Testnet',
     chainId: 787223,
     rpcUrl: 'https://rpc.nvnm.testnet.nvnmchain.io',
+    wsUrl: 'wss://rpc.nvnm.testnet.nvnmchain.io',
     explorerUrl: 'https://explorer.nvnm.testnet.nvnmchain.io',
     explorerName: 'nvnmchain Testnet Explorer',
     feeTokenSymbol: 'nUSD',
@@ -23,6 +34,7 @@ export const NETWORKS = {
     name: 'NVNM Canary',
     chainId: 787222,
     rpcUrl: 'https://rpc.nvnm.canary.mantrachain.dev',
+    wsUrl: 'wss://rpc.nvnm.canary.mantrachain.dev',
     explorerUrl: 'https://explorer.nvnm.canary.mantrachain.dev',
     explorerName: 'nvnmchain Explorer',
     feeTokenSymbol: 'nUSD',
@@ -33,6 +45,7 @@ export const NETWORKS = {
     name: 'NVNM Local',
     chainId: 787222,
     rpcUrl: (import.meta.env.VITE_LOCAL_RPC as string | undefined) ?? 'http://127.0.0.1:8545',
+    wsUrl: undefined,
     explorerUrl: 'http://127.0.0.1:8080',
     explorerName: 'Local explorer',
     feeTokenSymbol: 'nUSD',
@@ -94,7 +107,9 @@ function makeChain(net: (typeof NETWORKS)[NetworkKey]) {
     id: net.chainId,
     name: net.name,
     nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 18 },
-    rpcUrls: { default: { http: [net.rpcUrl] } },
+    rpcUrls: {
+      default: net.wsUrl ? { http: [net.rpcUrl], webSocket: [net.wsUrl] } : { http: [net.rpcUrl] },
+    },
     blockExplorers: { default: { name: net.explorerName, url: net.explorerUrl } },
     testnet: net.key === 'testnet',
   })

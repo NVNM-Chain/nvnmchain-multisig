@@ -154,7 +154,7 @@ function CallRow({
   index: number
   total: number
 }) {
-  const { decoded, meta } = useDecoded(publicClient, abis, call)
+  const { decoded, meta, verified } = useDecoded(publicClient, abis, call)
   const selector = selectorOf(call.data)
   const summary = useMemo(() => describe(decoded, selector, meta), [decoded, selector, meta])
   const operation = call.operation === 0 ? 'call' : call.operation === 1 ? 'delegatecall' : `unknown (${call.operation})`
@@ -181,7 +181,7 @@ function CallRow({
             <dt>interface</dt>
             <dd>
               {decoded.entry.name}
-              {decoded.entry.address ? '' : <span className="muted"> · inferred</span>}
+              {verified ? '' : <span className="muted"> · inferred</span>}
             </dd>
           </>
         )}

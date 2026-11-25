@@ -194,7 +194,7 @@ src/
   where the first entry defines the Safe the rest must match.
 - `*.github.io` is one origin for all of an account's Pages projects, so they share
   this app's `localStorage`. Serve it from its own domain to keep the queue private.
-- The page ships a CSP (`index.html`) without `unsafe-eval`, and refuses to render
+- The page ships a CSP (`vite.config.ts`) without `unsafe-eval`, and refuses to render
   inside a frame, since Pages cannot send `X-Frame-Options`/`frame-ancestors`.
 - Always verify the Safe address, target and calldata in your wallet before signing.
 - A Ledger shows a domain hash and a message hash, not the `safeTxHash`: match them

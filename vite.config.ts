@@ -14,8 +14,8 @@ function contentSecurityPolicy(): Plugin {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
-    // The chain RPC endpoints, plus a local node in dev builds.
-    "connect-src 'self' https: ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*",
+    // The chain RPC endpoints; the local network is listed by `npm run dev` only.
+    "connect-src 'self' https:",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",

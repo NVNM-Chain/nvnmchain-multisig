@@ -472,7 +472,7 @@ const opByteBatch = {
   }),
 }
 check(
-  'a batch that sets the operation MultiSendCallOnly ignores is flagged',
+  'a batch with an entry that is not a plain call is flagged',
   txRisks(opByteBatch).some((risk) => risk.startsWith('Operation byte')),
 )
 const fundedBatch = {
@@ -488,7 +488,7 @@ check(
   nativeValueProblem(tx) === null &&
     nativeValueProblem(batchTx) === null &&
     (nativeValueProblem({ ...tx, value: 1n }) ?? '').includes('no native token') &&
-    (nativeValueProblem({ ...batchTx, value: 1n }) ?? '').includes('no native token') &&
+    (nativeValueProblem({ ...batchTx, value: 1n }) ?? '').includes('the Safe ignores') &&
     (nativeValueProblem(fundedBatch) ?? '').includes('inside this batch'),
 )
 
@@ -531,6 +531,12 @@ savePending([])
 const failing: SafeTxParams = { ...tx, to: factory, data: '0xdeadbeef', safeTxGas: 100000n, nonce: 3n }
 const failed = await exec(safe, failing, await signTx(safe, failing))
 check('ExecutionFailure is not taken for an execution', failed.status === 'success' && !executionSucceeded(safe, failed.logs))
+const reverting: SafeTxParams = { ...opByteBatch, safeTxGas: 100000n, nonce: 4n }
+const reverted = await exec(safe, reverting, await signTx(safe, reverting))
+check('MultiSendCallOnly reverts on a delegatecall entry', reverted.status === 'success' && !executionSucceeded(safe, reverted.logs))
+const valued: SafeTxParams = { ...batchTx, value: 1n, nonce: 5n }
+const ignored = await exec(safe, valued, await signTx(safe, valued))
+check('the Safe ignores the value of a delegatecall', (await pub.getBalance({ address: safe })) === 0n && executionSucceeded(safe, ignored.logs))
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

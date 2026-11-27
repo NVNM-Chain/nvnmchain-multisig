@@ -70,19 +70,14 @@ export function callsOf(tx: SafeTxParams): { batch: boolean; calls: PackedCall[]
 }
 
 /**
- * Why a transaction cannot execute on this chain, or `null` when it can.
- *
- * This is a Tempo-style chain with no native token, so nothing may carry value —
- * not the Safe transaction itself, and not any call inside a MultiSend batch. Such
- * a transaction can never succeed, so signing it would only produce a dead digest
- * (and, for an on-chain approval, burn gas on one).
+ * Why a transaction is refused for carrying native value, or `null` when it carries none.
+ * This chain has no native token, so a call with value can never succeed.
  */
 export function nativeValueProblem(tx: SafeTxParams): string | null {
   if (tx.value > 0n) {
-    return (
-      `This transaction sends ${tx.value} wei of native value, but this chain has no native token, ` +
-      'so it can never execute.'
-    )
+    return tx.operation === 1
+      ? `This delegatecall carries ${tx.value} wei, which the Safe ignores; no transaction may carry value on this chain.`
+      : `This transaction sends ${tx.value} wei of native value, but this chain has no native token, so it can never execute.`
   }
   if (isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
     try {
@@ -100,7 +95,7 @@ export function nativeValueProblem(tx: SafeTxParams): string | null {
   return null
 }
 
-/** Warnings for a delegatecall outside MultiSend and for a gas refund the Safe pays. */
+/** Warnings for a delegatecall outside MultiSend, a batch MultiSendCallOnly reverts on, and a gas refund the Safe pays. */
 export function txRisks(tx: SafeTxParams): string[] {
   const risks: string[] = []
   const multiSend = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
@@ -108,12 +103,10 @@ export function txRisks(tx: SafeTxParams): string[] {
     risks.push(`Delegatecall: the code at ${tx.to} runs as the Safe and can change its owners or move everything it holds.`)
   }
   if (multiSend) {
-    // MultiSendCallOnly hard-codes CALL, so a review that honours the packed
-    // operation byte would describe a different transaction than the one that runs.
     try {
       if (decodeMultiSend(tx.data).some((call) => call.operation !== 0)) {
         risks.push(
-          'Operation byte: this batch sets a per-call operation, but MultiSendCallOnly ignores it and runs every entry as a plain call.',
+          'Operation byte: this batch has an entry that is not a plain call. MultiSendCallOnly reverts on it, so the batch cannot execute.',
         )
       }
     } catch {

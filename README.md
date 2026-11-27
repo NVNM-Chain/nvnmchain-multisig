@@ -184,8 +184,8 @@ src/
   call inside a MultiSend batch — is non-zero. A share link can still carry one (it
   is part of the signed struct), and the review shows it in red rather than letting
   it look executable.
-- **MultiSendCallOnly ignores the per-call operation byte** and always calls: a
-  batch that sets it is flagged. A gas refund denominated in the native currency
+- **MultiSendCallOnly reverts on an entry that is not a plain call**: a batch
+  with one is flagged. A gas refund denominated in the native currency
   cannot be paid on this chain and is flagged as a failing execution.
 - Imports are strict: a queued transaction must hash to its own `id`, every
   signature must be 65 bytes and recover to the owner it names, and every transaction

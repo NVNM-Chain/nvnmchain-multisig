@@ -15,9 +15,9 @@ bulletin board; this one does without.
 
 | | |
 | --- | --- |
-| **Network** | NVNM Testnet · chain id `787223` |
-| **RPC** | `https://rpc.nvnm.testnet.nvnmchain.io` |
-| **Fees** | paid in the TIP-20 fee token (`nUSD` on testnet, `pathUSD` on canary) — NVNM has no native gas token |
+| **Network** | NVNM Testnet · chain id `787223` (default); NVNM Mainnet · chain id `7872` |
+| **RPC** | `https://rpc.nvnm.testnet.nvnmchain.io`; mainnet `https://rpc.nvnm.mainnet.nvnmchain.io` |
+| **Fees** | paid in the TIP-20 fee token (`nUSD` on mainnet and testnet, `pathUSD` on canary) — NVNM has no native gas token |
 | **Safe** | v1.3.0 (SafeL2 singleton) at the official **eip155** addresses |
 
 ## What you can do

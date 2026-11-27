@@ -9,6 +9,15 @@ import { defineChain, formatUnits as viemFormatUnits } from 'viem'
  * token, default to `pathUSD` (`0x20c0…0000`).
  */
 export const NETWORKS = {
+  mainnet: {
+    key: 'mainnet',
+    name: 'NVNM Mainnet',
+    chainId: 7872,
+    rpcUrl: 'https://rpc.nvnm.mainnet.nvnmchain.io',
+    explorerUrl: 'https://explorer.nvnm.mainnet.nvnmchain.io',
+    explorerName: 'nvnmchain Explorer',
+    feeTokenSymbol: 'nUSD',
+  },
   testnet: {
     key: 'testnet',
     name: 'NVNM Testnet',

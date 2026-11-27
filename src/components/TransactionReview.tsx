@@ -147,24 +147,17 @@ function CallRow({
   call,
   index,
   total,
-  packed,
 }: {
   publicClient: PublicClient
   abis: readonly AbiEntry[]
   call: PackedCall
   index: number
   total: number
-  /** True when this entry is inside a MultiSend blob (where the operation byte is ignored). */
-  packed: boolean
 }) {
-  const { decoded, meta } = useDecoded(publicClient, abis, call)
+  const { decoded, meta, verified } = useDecoded(publicClient, abis, call)
   const selector = selectorOf(call.data)
   const summary = useMemo(() => describe(decoded, selector, meta), [decoded, selector, meta])
-  const operation = packed
-    ? 'call (MultiSendCallOnly ignores the operation byte)'
-    : call.operation === 1
-      ? 'delegatecall'
-      : 'call'
+  const operation = call.operation === 0 ? 'call' : call.operation === 1 ? 'delegatecall' : `unknown (${call.operation})`
 
   return (
     <div className="tx-call">
@@ -188,7 +181,7 @@ function CallRow({
             <dt>interface</dt>
             <dd>
               {decoded.entry.name}
-              {decoded.entry.address ? '' : <span className="muted"> · inferred</span>}
+              {verified ? '' : <span className="muted"> · inferred</span>}
             </dd>
           </>
         )}
@@ -245,8 +238,6 @@ export function TransactionReview({
       : onchain.safeTxHash.toLowerCase() === hashes.safeTxHash.toLowerCase()
 
   const { batch, calls } = useMemo(() => callsOf(tx), [tx])
-  // No native token on this chain: value is not a risk to weigh, it is a
-  // transaction that cannot run. The queue refuses to sign or execute it.
   const valueProblem = nativeValueProblem(tx)
 
   return (
@@ -289,15 +280,7 @@ export function TransactionReview({
       )}
 
       {calls.map((call, index) => (
-        <CallRow
-          key={index}
-          publicClient={publicClient}
-          abis={abis}
-          call={call}
-          index={index}
-          total={calls.length}
-          packed={batch}
-        />
+        <CallRow key={index} publicClient={publicClient} abis={abis} call={call} index={index} total={calls.length} />
       ))}
 
       <details style={{ marginTop: 10 }}>

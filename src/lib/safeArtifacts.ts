@@ -2,7 +2,7 @@
 // Safe v1.3.0 contracts, deployed deterministically through the Safe singleton
 // factory (safe-global/safe-singleton-factory) at 0x914d…43d7 with a zero salt.
 // These are the addresses of that variant of the v1.3.0 set: they differ from the
-// ones the older Araoz deployment proxy (0x4e59…956C) produces for the same init
+// ones the older Arachnid deployment proxy (0x4e59…956C) produces for the same init
 // code (0x3E5c…/0xa6B71…/0xf48f…/0x40A2…), so tooling that hardcodes the latter
 // will not see Safes created here. See README → Security notes.
 // Do not edit by hand.

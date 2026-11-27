@@ -30,8 +30,6 @@ export function useSafeInfo(publicClient: PublicClient, safe: Address | null) {
     setLoading(true)
     setError(null)
     try {
-      const code = await publicClient.getCode({ address: safe })
-      if (!code || code === '0x') throw new Error('No contract code at this address on the selected network.')
       // Refuses a lookalike on its bytecode, before anything it reports is used.
       const { version } = await assertSafeIdentity(publicClient, safe)
       const [owners, threshold, nonce] = await Promise.all([
@@ -42,9 +40,9 @@ export function useSafeInfo(publicClient: PublicClient, safe: Address | null) {
       if (run === latest.current) setInfo({ version, owners: [...owners], threshold, nonce })
     } catch (e) {
       if (run === latest.current) {
-		  setInfo(null)
-		  setError(errorMessage(e))
-	  }
+        setInfo(null)
+        setError(errorMessage(e))
+      }
     } finally {
       if (run === latest.current) setLoading(false)
     }

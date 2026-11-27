@@ -442,6 +442,13 @@ check(
     (e: unknown) => String(e).includes('not a Safe proxy'),
   ),
 )
+check(
+  'assertSafeIdentity says an address without code has none',
+  await assertSafeIdentity(pub, '0x000000000000000000000000000000000000dEaD').then(
+    () => false,
+    (e: unknown) => String(e).includes('No contract code'),
+  ),
+)
 
 // --- the chain guard reads the wallet, not a React snapshot ---
 type ChainWallet = Parameters<typeof assertOnCorrectChain>[0]

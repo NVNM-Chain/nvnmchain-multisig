@@ -79,39 +79,23 @@ export function nativeValueProblem(tx: SafeTxParams): string | null {
       ? `This delegatecall carries ${tx.value} wei, which the Safe ignores; no transaction may carry value on this chain.`
       : `This transaction sends ${tx.value} wei of native value, but this chain has no native token, so it can never execute.`
   }
-  if (isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
-    try {
-      const funded = decodeMultiSend(tx.data).find((call) => call.value > 0n)
-      if (funded) {
-        return (
-          `A call inside this batch sends ${funded.value} wei to ${funded.to}, but this chain has no ` +
-          'native token, so the batch can never execute.'
-        )
-      }
-    } catch {
-      /* malformed batch: shown as a raw call instead */
-    }
-  }
-  return null
+  const funded = callsOf(tx).calls.find((call) => call.value > 0n)
+  return funded
+    ? `A call inside this batch sends ${funded.value} wei to ${funded.to}, but this chain has no native token, so the batch can never execute.`
+    : null
 }
 
 /** Warnings for a delegatecall outside MultiSend, a batch MultiSendCallOnly reverts on, and a gas refund the Safe pays. */
 export function txRisks(tx: SafeTxParams): string[] {
   const risks: string[] = []
-  const multiSend = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
-  if (tx.operation === 1 && !multiSend) {
+  if (tx.operation === 1 && !isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
     risks.push(`Delegatecall: the code at ${tx.to} runs as the Safe and can change its owners or move everything it holds.`)
   }
-  if (multiSend) {
-    try {
-      if (decodeMultiSend(tx.data).some((call) => call.operation !== 0)) {
-        risks.push(
-          'Operation byte: this batch has an entry that is not a plain call. MultiSendCallOnly reverts on it, so the batch cannot execute.',
-        )
-      }
-    } catch {
-      /* malformed batch: already shown as a raw call */
-    }
+  const { batch, calls } = callsOf(tx)
+  if (batch && calls.some((call) => call.operation !== 0)) {
+    risks.push(
+      'Operation byte: this batch has an entry that is not a plain call. MultiSendCallOnly reverts on it, so the batch cannot execute.',
+    )
   }
   if (tx.gasPrice > 0n) {
     const receiver = tx.refundReceiver === zeroAddress ? 'whoever executes' : tx.refundReceiver

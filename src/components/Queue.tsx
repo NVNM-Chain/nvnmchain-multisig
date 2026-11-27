@@ -13,11 +13,11 @@ import {
 } from '../lib/safe'
 import { buildShareUrl, encodeSignatureShare, parseShared, parseSignatureShare } from '../lib/share'
 import { assertSafeTxHash, importPending, importSignatureShare } from '../lib/coordinate'
-import { txRisks } from '../lib/decode'
+import { nativeValueProblem, txRisks } from '../lib/decode'
 import type { SafeInfo } from '../lib/hooks'
 import type { AbiEntry } from '../lib/contracts'
 import { markExecuted, mergeSignature, rebasePending, removePending, type PendingTx } from '../lib/storage'
-import { send, type Wallet } from '../lib/wallet'
+import { send, assertOnCorrectChain, type Wallet } from '../lib/wallet'
 import { Notice, TxLink } from './ui'
 import { TransactionReview, TxTitle } from './TransactionReview'
 
@@ -131,6 +131,9 @@ function QueuedTxCard({
   const sign = () =>
     run('sign', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      const dead = nativeValueProblem(tx)
+      if (dead) throw new Error(dead)
+      await assertOnCorrectChain(wallet)
       await assertNotDead('Signing')
       await assertSafeTxHash(wallet.publicClient, safe, tx, item.id)
       const typed = safeTxTypedData(wallet.chainId, safe, tx)
@@ -152,6 +155,9 @@ function QueuedTxCard({
   const approveOnChain = () =>
     run('approve', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      // Approving a digest that can never execute would only burn gas.
+      const dead = nativeValueProblem(tx)
+      if (dead) throw new Error(dead)
       // `approveHash` costs gas and its approval could never be used on a dead nonce.
       await assertNotDead('On-chain approval')
       await assertSafeTxHash(wallet.publicClient, safe, tx, item.id)
@@ -165,6 +171,8 @@ function QueuedTxCard({
   const execute = () =>
     run('execute', async () => {
       if (!wallet.walletClient || !wallet.account) return
+      const dead = nativeValueProblem(tx)
+      if (dead) throw new Error(dead)
       const entries = [
         ...offchain.map((owner) => ({ owner: owner as Address, signature: item.signatures[owner] })),
         ...onchain.map((owner) => ({ owner: owner as Address, signature: preApprovedSignature(owner as Address) })),

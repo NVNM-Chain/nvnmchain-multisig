@@ -1,4 +1,5 @@
 import { getAddress, isAddress, type Address, type Hex } from 'viem'
+import { assertSignature, isBytes } from './safe'
 import { parsePending, type PendingTx } from './storage'
 
 /** A single owner approval, small enough to paste into a chat message. */
@@ -15,6 +16,10 @@ export type ShareLink = {
   chainId?: number
   txs?: PendingTx[]
   sig?: SignatureShare
+  /** The link named a Safe/chain that its transactions do not belong to. */
+  mismatch?: boolean
+  /** How many transactions were ignored because they belong to another Safe/network. */
+  skipped?: number
 }
 
 /** Percent-free base64url of a UTF-8 string. */
@@ -52,16 +57,18 @@ function assertSignatureShare(value: unknown): SignatureShare {
   if (
     !share ||
     typeof share !== 'object' ||
-    typeof share.id !== 'string' ||
-    !share.id.startsWith('0x') ||
+    !isBytes(share.id, 32) ||
     typeof share.owner !== 'string' ||
     !isAddress(share.owner) ||
-    typeof share.signature !== 'string' ||
-    !share.signature.startsWith('0x')
+    !isBytes(share.signature, 65)
   ) {
     throw new Error('Unrecognised signature')
   }
-  return { id: share.id as Hex, owner: getAddress(share.owner), signature: share.signature as Hex }
+  return {
+    id: share.id as Hex,
+    owner: getAddress(share.owner),
+    signature: assertSignature(share.signature),
+  }
 }
 
 /** Encode a single signature as a compact, paste-friendly code. */
@@ -143,9 +150,29 @@ export function readShareLink(): ShareLink {
     }
   }
 
-  // Fall back to the address/chain carried inside the transaction payload.
-  if (!link.safe && link.txs?.[0]) link.safe = link.txs[0].safe
-  if (!link.chainId && link.txs?.[0]) link.chainId = link.txs[0].chainId
+  // Every entry must belong to the Safe and network the link advertises. The
+  // advertisement is the link's own `safe`/`chain` when present, otherwise the first
+  // entry — a payload with no decoration still names one Safe by starting with it.
+  // Checking only the first entry would let a payload that *starts* consistent append
+  // transactions for another Safe, all of which the banner would then misdescribe.
+  const first = link.txs?.[0]
+  const advertisedSafe = link.safe ?? first?.safe
+  const advertisedChain = link.chainId ?? first?.chainId
+  // `!== undefined` rather than truthiness: a nonsensical `chain=0` must not be able
+  // to switch the check off.
+  if (link.txs && link.txs.length > 0 && advertisedSafe !== undefined && advertisedChain !== undefined) {
+    const kept = link.txs.filter(
+      (tx) => tx.safe.toLowerCase() === advertisedSafe.toLowerCase() && tx.chainId === advertisedChain,
+    )
+    if (kept.length !== link.txs.length) {
+      link.mismatch = true
+      link.skipped = link.txs.length - kept.length
+      link.txs = kept
+    }
+  }
+
+  if (!link.safe && advertisedSafe) link.safe = advertisedSafe
+  if (!link.chainId && advertisedChain) link.chainId = advertisedChain
   return link
 }
 

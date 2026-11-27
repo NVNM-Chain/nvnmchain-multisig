@@ -17,9 +17,10 @@ import {
   type SafeTxParams,
 } from '../lib/safe'
 import { assertSafeTxHash } from '../lib/coordinate'
+import { nativeValueProblem, txRisks } from '../lib/decode'
 import { useTokenMeta, type SafeInfo } from '../lib/hooks'
 import type { PendingTx } from '../lib/storage'
-import type { Wallet } from '../lib/wallet'
+import { assertOnCorrectChain, type Wallet } from '../lib/wallet'
 import { Field, Notice } from './ui'
 import { TransactionReview } from './TransactionReview'
 import {
@@ -195,6 +196,10 @@ export function NewTransaction({
     try {
       const nonce = await chosenNonce()
       const safeTx = await buildTx(nonce)
+      // Defense in depth: the builder never sets value (this chain has no native
+      // token), and anything that did must not reach a wallet.
+      const valueProblem = nativeValueProblem(safeTx)
+      if (valueProblem) throw new Error(valueProblem)
       const hash = computeSafeTxHash(BigInt(wallet.chainId), safe, safeTx)
 
       // Queue only a hash the preview showed; otherwise show the new one and wait for a second press.
@@ -213,6 +218,9 @@ export function NewTransaction({
       await assertSafeTxHash(wallet.publicClient, safe, safeTx, hash)
       const signatures: PendingTx['signatures'] = {}
       if (iAmOwner) {
+        // The digest is built for the app's network; a wallet on another one would
+        // be asked to sign for a chain it cannot broadcast to.
+        await assertOnCorrectChain(wallet)
         const typed = safeTxTypedData(wallet.chainId, safe, safeTx)
         const rawSignature = await wallet.walletClient.signTypedData({
           account: wallet.account,
@@ -380,13 +388,20 @@ export function NewTransaction({
       </div>
 
       {preview && (
-        <TransactionReview
-          publicClient={wallet.publicClient}
-          safe={safe}
-          chainId={wallet.chainId}
-          tx={preview}
-          abis={abis}
-        />
+        <>
+          {txRisks(preview).map((risk) => (
+            <div style={{ marginTop: 14 }} key={risk}>
+              <Notice kind="err">{risk}</Notice>
+            </div>
+          ))}
+          <TransactionReview
+            publicClient={wallet.publicClient}
+            safe={safe}
+            chainId={wallet.chainId}
+            tx={preview}
+            abis={abis}
+          />
+        </>
       )}
     </section>
   )

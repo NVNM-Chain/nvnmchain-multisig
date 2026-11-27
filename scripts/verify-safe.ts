@@ -4,19 +4,28 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { foundry } from 'viem/chains'
 import { gasToSend, parseUnits, TX_GAS_CAP } from '../src/chain'
 import { multiSendCallOnlyAbi, safeAbi, safeProxyFactoryAbi } from '../src/lib/abi'
-import { SAFE_ADDRESSES, SAFE_CREATION_CODE } from '../src/lib/safeArtifacts'
+import {
+  SAFE_ADDRESSES,
+  SAFE_CREATION_CODE,
+  SAFE_L2_RUNTIME_HASH,
+  SAFE_PROXY_RUNTIME_HASH,
+} from '../src/lib/safeArtifacts'
 import {
   buildSafeTx,
   computeSafeTxHash,
   encodeSafeSetup,
   executionSucceeded,
   nextFreeNonce,
+  normalizeSignatureV,
   packMultiSend,
   packSignatures,
   preApprovedSignature,
+  proxyRuntimeProblem,
   predictSafeAddress,
   recoverSigner,
   safeDomainSeparator,
+  safeIdentityProblem,
+  SAFE_MASTER_COPY_SLOT,
   safeTxStructHash,
   safeTxTypedData,
   serializeTx,
@@ -35,8 +44,9 @@ import {
   parseSignatureShare,
   readShareLink,
 } from '../src/lib/share'
-import { assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
-import { decodeMultiSend, isMultiSendCall, txRisks } from '../src/lib/decode'
+import { assertSafeIdentity, assertSafeTxHash, importPending, importSignatureShare } from '../src/lib/coordinate'
+import { assertOnCorrectChain } from '../src/lib/wallet'
+import { decodeMultiSend, isMultiSendCall, nativeValueProblem, txRisks } from '../src/lib/decode'
 import { BUILTIN_ABIS, decodeWithAbis } from '../src/lib/contracts'
 import { loadPending, rebasePending, savePending, upsertPending, type PendingTx } from '../src/lib/storage'
 
@@ -116,6 +126,19 @@ const safe = ('0x' + proxyLog.data.slice(26, 66)) as `0x${string}`
 check('predictSafeAddress == factory proxy', predicted.toLowerCase() === safe.toLowerCase(), `${predicted} / ${safe}`)
 const owners = await pub.readContract({ address: safe, abi: safeAbi, functionName: 'getOwners' })
 check('proxy owners/threshold', owners.length === 1 && owners[0]!.toLowerCase() === account.address.toLowerCase() && (await pub.readContract({ address: safe, abi: safeAbi, functionName: 'getThreshold' })) === 1n)
+// The identity check the UI runs on load depends on slot 0 naming the singleton.
+const proxySlot0 = await pub.getStorageAt({ address: safe, slot: SAFE_MASTER_COPY_SLOT })
+check(
+  'proxy slot 0 is the singleton (what the identity check reads)',
+  Boolean(proxySlot0) && (`0x${(proxySlot0 as string).slice(-40)}`).toLowerCase() === safeL2.toLowerCase(),
+)
+// The identity anchor: the proxy's runtime code, which a lookalike cannot forge.
+const proxyRuntimeHash = keccak256((await pub.getCode({ address: safe }))!)
+check('deployed proxy runtime is SafeProxy (pinned constant)', proxyRuntimeHash === SAFE_PROXY_RUNTIME_HASH, proxyRuntimeHash)
+check(
+  'bundled SafeL2 runtime matches the pinned constant',
+  keccak256((await pub.getCode({ address: safeL2 }))!) === SAFE_L2_RUNTIME_HASH,
+)
 
 // --- single transaction: hash + sign + execute ---
 const tx: SafeTxParams = {
@@ -307,6 +330,166 @@ check(
     () => false,
     () => true,
   ),
+)
+
+// --- hardened imports: signature length, chain id, link consistency, Safe identity ---
+const shortSig = ('0x' + '11'.repeat(64)) as `0x${string}` // EIP-2098 style, not r‖s‖v
+check('packSignatures refuses a signature that is not 65 bytes', throws(() => packSignatures([{ owner: account.address, signature: shortSig }])))
+check('normalizeSignatureV refuses a signature that is not 65 bytes', throws(() => normalizeSignatureV(shortSig)))
+check(
+  'a signature code with a short signature or a short hash is refused',
+  throws(() => decodeSignatureShare(encodeSignatureShare({ ...shareSig, signature: shortSig }))) &&
+    throws(() => decodeSignatureShare(encodeSignatureShare({ ...shareSig, id: '0x1234' as `0x${string}` }))),
+)
+check(
+  'imports refuse a non-positive chain id',
+  throws(() => decodeShare(encodeShare([{ ...sample, chainId: 0 }]))) &&
+    throws(() => decodeShare(encodeShare([{ ...sample, chainId: -1 }]))),
+)
+const otherSafeTx: PendingTx = {
+  id: computeSafeTxHash(31337n, secondOwner, tx2),
+  chainId: 31337,
+  safe: secondOwner,
+  createdAt: Date.now(),
+  tx: serializeTx(tx2),
+  signatures: {},
+}
+const otherChainTx: PendingTx = {
+  id: computeSafeTxHash(1n, safe, tx2),
+  chainId: 1,
+  safe,
+  createdAt: Date.now(),
+  tx: serializeTx(tx2),
+  signatures: {},
+}
+loc.hash = `#safe=${secondOwner}&chain=31337&txs=${encodeShare([sample])}`
+const foreignSafe = readShareLink()
+check(
+  'a link naming a Safe its transactions do not belong to imports nothing',
+  foreignSafe.mismatch === true &&
+    foreignSafe.skipped === 1 &&
+    foreignSafe.txs?.length === 0 &&
+    foreignSafe.safe?.toLowerCase() === secondOwner.toLowerCase(),
+)
+loc.hash = `#safe=${sample.safe}&chain=1&txs=${encodeShare([sample])}`
+const foreignChain = readShareLink()
+check(
+  'a link naming another network than its transactions imports nothing',
+  foreignChain.mismatch === true && foreignChain.chainId === 1 && foreignChain.txs?.length === 0,
+)
+// The gap this closes: a payload that *starts* consistent and appends another Safe.
+loc.hash = `#safe=${sample.safe}&chain=31337&txs=${encodeShare([sample, otherSafeTx])}`
+const mixedPayload = readShareLink()
+check(
+  'every entry is checked, not just the first: a trailing foreign Safe is dropped',
+  mixedPayload.mismatch === true &&
+    mixedPayload.skipped === 1 &&
+    mixedPayload.txs?.length === 1 &&
+    mixedPayload.txs[0]!.id === sample.id,
+)
+loc.hash = `#safe=${sample.safe}&chain=0&txs=${encodeShare([sample])}`
+const zeroChain = readShareLink()
+check(
+  'a nonsensical chain in the link cannot switch the check off',
+  zeroChain.mismatch === true && zeroChain.txs?.length === 0,
+)
+loc.hash = `#txs=${encodeShare([sample, otherChainTx])}`
+const undecorated = readShareLink()
+check(
+  'a mixed payload is flagged even when the link names no Safe or network',
+  undecorated.mismatch === true &&
+    undecorated.skipped === 1 &&
+    undecorated.txs?.length === 1 &&
+    undecorated.chainId === 31337 &&
+    undecorated.safe?.toLowerCase() === sample.safe.toLowerCase(),
+)
+const impostorRuntime = keccak256((await pub.getCode({ address: multiSendLocal }))!)
+const forgedAnswers = {
+  // everything a lookalike would answer to look like a Safe
+  masterCopy: SAFE_ADDRESSES.safeL2,
+  version: '1.3.0',
+  singletonCodeHash: SAFE_L2_RUNTIME_HASH,
+}
+check(
+  'a real proxy over the official singleton passes the identity check',
+  safeIdentityProblem({ proxyCodeHash: SAFE_PROXY_RUNTIME_HASH, ...forgedAnswers }) === null,
+)
+check(
+  'a lookalike answering slot 0 = SafeL2 and version 1.3.0 is refused on its code',
+  safeIdentityProblem({ ...forgedAnswers, proxyCodeHash: impostorRuntime }) !== null &&
+    proxyRuntimeProblem(impostorRuntime) !== null,
+)
+check(
+  'a proxy over a non-official singleton is refused',
+  safeIdentityProblem({ ...forgedAnswers, proxyCodeHash: SAFE_PROXY_RUNTIME_HASH, masterCopy: secondOwner }) !== null,
+)
+check(
+  'a proxy whose singleton is not the official bytecode is refused',
+  safeIdentityProblem({
+    ...forgedAnswers,
+    proxyCodeHash: SAFE_PROXY_RUNTIME_HASH,
+    singletonCodeHash: impostorRuntime,
+  }) !== null,
+)
+check(
+  'a Safe reporting another version is refused',
+  safeIdentityProblem({ ...forgedAnswers, proxyCodeHash: SAFE_PROXY_RUNTIME_HASH, version: '1.4.1' }) !== null,
+)
+check(
+  'assertSafeIdentity refuses an address that is not a proxy, before reading slot 0',
+  await assertSafeIdentity(pub, multiSendLocal).then(
+    () => false,
+    (e: unknown) => String(e).includes('not a Safe proxy'),
+  ),
+)
+
+// --- the chain guard reads the wallet, not a React snapshot ---
+type ChainWallet = Parameters<typeof assertOnCorrectChain>[0]
+const fakeWallet = (snapshot: number | null, reported: string): ChainWallet =>
+  ({
+    provider: { request: async ({ method }: { method: string }) => (method === 'eth_chainId' ? reported : null) },
+    chainId: 787223, // the app's network (NVNM testnet)
+    walletChainId: snapshot, // what React state would have shown
+    networkKey: 'testnet',
+  }) as unknown as ChainWallet
+const passesChain = (w: ChainWallet) => assertOnCorrectChain(w).then(() => true, () => false)
+check(
+  'the chain guard asks the wallet, not the snapshot it captured earlier',
+  (await passesChain(fakeWallet(787223, '0xc0317'))) && // both agree
+    (await passesChain(fakeWallet(1, '0xc0317'))) && // stale snapshot is ignored
+    !(await passesChain(fakeWallet(787223, '0x1'))) && // wallet moved away: refused
+    !(await passesChain(fakeWallet(787223, 'garbage'))), // unreadable: fails closed
+)
+
+// --- a batch must not describe something MultiSendCallOnly will not do ---
+const opByteBatch = {
+  ...batchTx,
+  data: encodeFunctionData({
+    abi: multiSendCallOnlyAbi,
+    functionName: 'multiSend',
+    // flip the first entry's operation byte from call (0) to delegatecall (1)
+    args: [`0x01${packMultiSend([{ to: '0x000000000000000000000000000000000000dEaD', value: 0n, data: '0x' }]).slice(4)}`],
+  }),
+}
+check(
+  'a batch that sets the operation MultiSendCallOnly ignores is flagged',
+  txRisks(opByteBatch).some((risk) => risk.startsWith('Operation byte')),
+)
+const fundedBatch = {
+  ...batchTx,
+  data: encodeFunctionData({
+    abi: multiSendCallOnlyAbi,
+    functionName: 'multiSend',
+    args: [packMultiSend([{ to: '0x000000000000000000000000000000000000dEaD', value: 7n, data: '0x' }])],
+  }),
+}
+check(
+  'value is refused, not merely flagged (no native token on this chain)',
+  nativeValueProblem(tx) === null &&
+    nativeValueProblem(batchTx) === null &&
+    (nativeValueProblem({ ...tx, value: 1n }) ?? '').includes('no native token') &&
+    (nativeValueProblem({ ...batchTx, value: 1n }) ?? '').includes('no native token') &&
+    (nativeValueProblem(fundedBatch) ?? '').includes('inside this batch'),
 )
 
 // --- queueing the same transaction again must keep its signatures ---

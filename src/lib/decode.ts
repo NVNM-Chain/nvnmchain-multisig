@@ -69,16 +69,65 @@ export function callsOf(tx: SafeTxParams): { batch: boolean; calls: PackedCall[]
   return { batch: false, calls: [{ operation: tx.operation, to: tx.to, value: tx.value, data: tx.data }] }
 }
 
+/**
+ * Why a transaction cannot execute on this chain, or `null` when it can.
+ *
+ * This is a Tempo-style chain with no native token, so nothing may carry value —
+ * not the Safe transaction itself, and not any call inside a MultiSend batch. Such
+ * a transaction can never succeed, so signing it would only produce a dead digest
+ * (and, for an on-chain approval, burn gas on one).
+ */
+export function nativeValueProblem(tx: SafeTxParams): string | null {
+  if (tx.value > 0n) {
+    return (
+      `This transaction sends ${tx.value} wei of native value, but this chain has no native token, ` +
+      'so it can never execute.'
+    )
+  }
+  if (isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
+    try {
+      const funded = decodeMultiSend(tx.data).find((call) => call.value > 0n)
+      if (funded) {
+        return (
+          `A call inside this batch sends ${funded.value} wei to ${funded.to}, but this chain has no ` +
+          'native token, so the batch can never execute.'
+        )
+      }
+    } catch {
+      /* malformed batch: shown as a raw call instead */
+    }
+  }
+  return null
+}
+
 /** Warnings for a delegatecall outside MultiSend and for a gas refund the Safe pays. */
 export function txRisks(tx: SafeTxParams): string[] {
   const risks: string[] = []
-  if (tx.operation === 1 && !isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)) {
+  const multiSend = isMultiSendCall(tx, SAFE_ADDRESSES.multiSendCallOnly)
+  if (tx.operation === 1 && !multiSend) {
     risks.push(`Delegatecall: the code at ${tx.to} runs as the Safe and can change its owners or move everything it holds.`)
   }
+  if (multiSend) {
+    // MultiSendCallOnly hard-codes CALL, so a review that honours the packed
+    // operation byte would describe a different transaction than the one that runs.
+    try {
+      if (decodeMultiSend(tx.data).some((call) => call.operation !== 0)) {
+        risks.push(
+          'Operation byte: this batch sets a per-call operation, but MultiSendCallOnly ignores it and runs every entry as a plain call.',
+        )
+      }
+    } catch {
+      /* malformed batch: already shown as a raw call */
+    }
+  }
   if (tx.gasPrice > 0n) {
-    const token = tx.gasToken === zeroAddress ? 'the native token' : `token ${tx.gasToken}`
     const receiver = tx.refundReceiver === zeroAddress ? 'whoever executes' : tx.refundReceiver
-    risks.push(`Gas refund: the Safe pays (gas used + ${tx.baseGas}) × ${tx.gasPrice} of ${token} to ${receiver}.`)
+    const amount = `(gas used + ${tx.baseGas}) × ${tx.gasPrice}`
+    risks.push(
+      tx.gasToken === zeroAddress
+        ? `Gas refund: the Safe is asked to pay ${amount} of the native currency to ${receiver}. This chain has no native token, so the refund cannot be paid and the execution would fail.`
+        : `Gas refund: the Safe pays ${amount} of token ${tx.gasToken} to ${receiver}.`,
+    )
   }
   return risks
 }

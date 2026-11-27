@@ -3,28 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      The Content-Security-Policy is injected by vite.config.ts for production
+      builds only (dev injects an inline module the policy would block).
+      `frame-ancestors` is ignored in a meta policy, so src/main.tsx refuses to
+      render inside a frame instead.
+    -->
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%logo.svg" />
     <meta name="theme-color" content="#f5f7fb" />
     <title>NVNM Multisig</title>
     <meta name="description" content="Lightweight Safe multisig for NVNM Chain" />
-    <script>
-      // Apply the theme before first paint to avoid a flash.
-      ;(function () {
-        try {
-          var key = 'nvnmchain-multisig:theme:v1'
-          var stored = localStorage.getItem(key)
-          var theme =
-            stored === 'light' || stored === 'dark'
-              ? stored
-              : window.matchMedia('(prefers-color-scheme: light)').matches
-                ? 'light'
-                : 'dark'
-          document.documentElement.setAttribute('data-theme', theme)
-        } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'dark')
-        }
-      })()
-    </script>
+    <script src="%BASE_URL%theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

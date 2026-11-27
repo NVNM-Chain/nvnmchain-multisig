@@ -13,7 +13,7 @@ import {
   type Address,
   type Hex,
 } from 'viem'
-import { SAFE_ADDRESSES, SAFE_CREATION_CODE, CREATE2_FACTORY } from './safeArtifacts'
+import { SAFE_ADDRESSES, SAFE_CREATION_CODE, SAFE_L2_RUNTIME_HASH, SAFE_PROXY_RUNTIME_HASH, SAFE_VERSION, CREATE2_FACTORY } from './safeArtifacts'
 import { multiSendCallOnlyAbi, safeAbi } from './abi'
 import type { StoredTx } from './storage'
 
@@ -260,8 +260,17 @@ export function isBytes(value: unknown, size?: number): value is Hex {
 /** True for a decimal string that fits a uint256. */
 export const isUint256 = (v: unknown) => typeof v === 'string' && /^\d{1,78}$/.test(v) && BigInt(v) < 1n << 256n
 
+/** A Safe owner signature is exactly 65 bytes: `r ‖ s ‖ v`. */
+export function assertSignature(signature: unknown): Hex {
+  if (!isBytes(signature, 65)) {
+    throw new Error('A Safe signature must be 65 bytes (r ‖ s ‖ v).')
+  }
+  return signature
+}
+
 /** Some wallets return `v = 0/1`; Safe's `ecrecover` expects 27/28. */
-export function normalizeSignatureV(signature: Hex): Hex {
+export function normalizeSignatureV(raw: Hex): Hex {
+  const signature = assertSignature(raw)
   const v = Number.parseInt(signature.slice(-2), 16)
   if (v === 0 || v === 1) return (signature.slice(0, -2) + (v + 27).toString(16).padStart(2, '0')) as Hex
   return signature
@@ -279,7 +288,9 @@ export function packSignatures(signatures: { owner: Address; signature: Hex }[])
     const bv = BigInt(b.owner)
     return av < bv ? -1 : av > bv ? 1 : 0
   })
-  return concat(sorted.map((s) => s.signature))
+  // Safe reads the blob in 65-byte chunks; a short signature would silently
+  // shift every signature after it and make the whole execution unverifiable.
+  return concat(sorted.map((s) => assertSignature(s.signature)))
 }
 
 /**
@@ -296,6 +307,69 @@ const EXECUTION_SUCCESS = toEventSelector('ExecutionSuccess(bytes32,uint256)')
 /** True when a receipt's logs carry the Safe's ExecutionSuccess; being mined does not mean the call ran. */
 export function executionSucceeded(safe: Address, logs: readonly { address: Address; topics: readonly Hex[] }[]): boolean {
   return logs.some((log) => log.address.toLowerCase() === safe.toLowerCase() && log.topics[0] === EXECUTION_SUCCESS)
+}
+
+/** Slot 0 of a Safe proxy holds its singleton (`masterCopy`). Padded to 32 bytes
+ * because some nodes reject an unpadded `eth_getStorageAt` position. */
+export const SAFE_MASTER_COPY_SLOT = `0x${'00'.repeat(32)}` as Hex
+
+/**
+ * Why `codeHash` is not the SafeProxy runtime, or `null` when it is.
+ *
+ * This is the one check a lookalike cannot satisfy by behaviour: it would need
+ * bytecode that hashes to the same value. Everything else such a contract returns
+ * — `VERSION()`, `getOwners()`, `getThreshold()`, `getTransactionHash()` — is
+ * whatever it chooses to say.
+ */
+export function proxyRuntimeProblem(codeHash: string | null | undefined): string | null {
+  if (!codeHash) return 'No contract code at this address on the selected network.'
+  if (codeHash.toLowerCase() !== SAFE_PROXY_RUNTIME_HASH.toLowerCase()) {
+    return (
+      'This address is not a Safe proxy: its runtime code is not SafeProxy, so everything it ' +
+      'reports (version, owners, threshold, transaction hash) would be whatever it chose to say.'
+    )
+  }
+  return null
+}
+
+/** What was read from an address that claims to be a Safe. */
+export type SafeIdentityFacts = {
+  /** keccak256 of the code at the address. */
+  proxyCodeHash?: string | null
+  /** Singleton read from slot 0. */
+  masterCopy?: string | null
+  /** `VERSION()` as reported by the address. */
+  version?: string | null
+  /** keccak256 of the code at `SAFE_ADDRESSES.safeL2`. */
+  singletonCodeHash?: string | null
+}
+
+/**
+ * Why an address is not a Safe v1.3.0 proxy over the official SafeL2 singleton,
+ * or `null` when it is.
+ *
+ * Order matters: the proxy runtime is checked first (it is the only fact a
+ * lookalike cannot fabricate), then the singleton it delegates to, then the
+ * singleton's own runtime, and only then the answers it gave.
+ */
+export function safeIdentityProblem(facts: SafeIdentityFacts): string | null {
+  const runtime = proxyRuntimeProblem(facts.proxyCodeHash)
+  if (runtime) return runtime
+  const expected = SAFE_ADDRESSES.safeL2.toLowerCase()
+  const actual = facts.masterCopy?.toLowerCase()
+  if (!actual || actual === ZERO_ADDRESS) {
+    return `This address is not a Safe proxy: its singleton slot is empty (expected SafeL2 ${SAFE_ADDRESSES.safeL2}).`
+  }
+  if (actual !== expected) {
+    return `This address is not a Safe v1.3.0 proxy: its singleton is ${facts.masterCopy}, but this app only operates the SafeL2 singleton ${SAFE_ADDRESSES.safeL2}.`
+  }
+  if ((facts.singletonCodeHash ?? '').toLowerCase() !== SAFE_L2_RUNTIME_HASH.toLowerCase()) {
+    return `The singleton at ${SAFE_ADDRESSES.safeL2} is not the official SafeL2 bytecode, so what it does cannot be trusted.`
+  }
+  if (facts.version !== SAFE_VERSION) {
+    return `This Safe reports version ${facts.version ?? '(unknown)'}; this app only signs for Safe v${SAFE_VERSION}.`
+  }
+  return null
 }
 
 /** Read the deployed Safe suite status. */

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Address, PublicClient } from 'viem'
 import { safeAbi, tip20Abi } from './abi'
+import { assertSafeIdentity } from './coordinate'
 import { errorMessage } from '../chain'
 
 export type SafeInfo = {
@@ -31,15 +32,19 @@ export function useSafeInfo(publicClient: PublicClient, safe: Address | null) {
     try {
       const code = await publicClient.getCode({ address: safe })
       if (!code || code === '0x') throw new Error('No contract code at this address on the selected network.')
-      const [version, owners, threshold, nonce] = await Promise.all([
-        publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'VERSION' }),
+      // Refuses a lookalike on its bytecode, before anything it reports is used.
+      const { version } = await assertSafeIdentity(publicClient, safe)
+      const [owners, threshold, nonce] = await Promise.all([
         publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'getOwners' }),
         publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'getThreshold' }),
         publicClient.readContract({ address: safe, abi: safeAbi, functionName: 'nonce' }),
       ])
       if (run === latest.current) setInfo({ version, owners: [...owners], threshold, nonce })
     } catch (e) {
-      if (run === latest.current) setError(errorMessage(e))
+      if (run === latest.current) {
+		  setInfo(null)
+		  setError(errorMessage(e))
+	  }
     } finally {
       if (run === latest.current) setLoading(false)
     }

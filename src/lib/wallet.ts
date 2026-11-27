@@ -79,9 +79,52 @@ export type Wallet = {
   setNetworkKey: (key: NetworkKey) => void
 }
 
+/**
+ * Ask the wallet which chain it is on, right now.
+ *
+ * The `Wallet` snapshot cannot answer this: `walletChainId` only moves when the
+ * provider emits `chainChanged`, which is asynchronous and which some wallets
+ * (relayed/mobile ones in particular) never emit at all.
+ */
+export async function readWalletChainId(wallet: Wallet): Promise<number | null> {
+  if (!wallet.provider) return null
+  try {
+    const id = (await wallet.provider.request({ method: 'eth_chainId' })) as string
+    const chainId = Number.parseInt(id, 16)
+    return Number.isSafeInteger(chainId) ? chainId : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Refuse to use the wallet unless it is on the network the app is reading.
+ *
+ * Safe addresses are identical on every NVNM network, so a wallet left on another
+ * chain would sign for one network and broadcast on another. The chain is read from
+ * the provider on every call rather than from React state, so a stale snapshot
+ * (or a wallet that never announced its switch) cannot let a transaction through.
+ * It is still a check-then-act: the wallet's own domain/chain prompt is the real
+ * backstop, this just makes the failure early and legible.
+ */
+export async function assertOnCorrectChain(wallet: Wallet): Promise<void> {
+  const network = chainFor(wallet.networkKey).name
+  const chainId = await readWalletChainId(wallet)
+  if (chainId === null) {
+    throw new Error(`Your wallet's network could not be confirmed; switch it to ${network} and try again.`)
+  }
+  if (chainId !== wallet.chainId) {
+    throw new Error(
+      `Your wallet is on chain ${chainId}, but this app is on ${network} (chain ${wallet.chainId}). ` +
+        "Switch the wallet's network first.",
+    )
+  }
+}
+
 /** Send a call with `gasToSend` of the node's estimate as its gas, so the wallet does not pad it. */
 export async function send(wallet: Wallet, call: { to: Address; data: Hex }): Promise<Hex> {
   if (!wallet.walletClient || !wallet.account) throw new Error('Connect a wallet first.')
+  await assertOnCorrectChain(wallet)
   const request = { account: wallet.account, ...call }
   const gas = gasToSend(await wallet.publicClient.estimateGas(request))
   return wallet.walletClient.sendTransaction({ ...request, chain: chainFor(wallet.networkKey), gas })
@@ -129,8 +172,12 @@ export function useWallet(): Wallet {
     }
     provider.on?.('accountsChanged', onAccounts)
     provider.on?.('chainChanged', onChain)
+    // Snapshot refreshes for the banner: the guards read the chain themselves, but a
+    // wallet that never emits `chainChanged` would otherwise leave the banner wrong.
+    window.addEventListener('focus', readChain)
     return () => {
       cancelled = true
+      window.removeEventListener('focus', readChain)
       provider.removeListener?.('accountsChanged', onAccounts)
       provider.removeListener?.('chainChanged', onChain)
     }

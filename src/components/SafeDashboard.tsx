@@ -119,6 +119,13 @@ export function SafeDashboard({
         </button>
       </div>
 
+      {!remembered && (
+        <div className="notice warn" style={{ marginTop: 14 }}>
+          This Safe is not in your list — it came from a link or was typed in. The app verified it is
+          a Safe v1.3.0 proxy, but confirm the address before signing anything.
+        </div>
+      )}
+
       {!iAmOwner && wallet.account && (
         <div className="notice warn" style={{ marginTop: 14 }}>
           The connected account {shortAddress(wallet.account, 5)} is not an owner. You can still

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { Address } from 'viem'
-import { getNetwork, getNetworkKey, networkKeyForChainId, setNetworkKey as persistNetwork, errorMessage } from './chain'
+import { getNetwork, NETWORKS, networkKeyForChainId, errorMessage, type NetworkKey } from './chain'
 import { useSafeInfo } from './lib/hooks'
 import { allAbis, type AbiEntry } from './lib/contracts'
 import { nextFreeNonce } from './lib/safe'
@@ -36,16 +36,12 @@ export default function App() {
   const { info, error: infoError, refresh: refreshInfo, loading: infoLoading } = useSafeInfo(wallet.publicClient, safe)
 
   const linkChainKey = link.chainId ? networkKeyForChainId(link.chainId) : null
-  const switchingNetwork = Boolean(linkChainKey && linkChainKey !== wallet.networkKey)
-
-  // Apply the deep link once: switch to the linked network. The Safe opens but is not remembered.
-  useEffect(() => {
-    if (link.chainId) {
-      const key = networkKeyForChainId(link.chainId)
-      if (key && key !== getNetworkKey()) persistNetwork(key)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // A link may name another network. Offer it, never apply it silently: the same Safe
+  // address exists on every NVNM network, with a possibly different owner set.
+  const [linkNetworkDismissed, setLinkNetworkDismissed] = useState(false)
+  const pendingLinkNetwork: NetworkKey | null =
+    !linkNetworkDismissed && linkChainKey && linkChainKey !== wallet.networkKey ? linkChainKey : null
+  const switchingNetwork = Boolean(pendingLinkNetwork)
 
   const handleLoad = useCallback(
     (address: Address) => {
@@ -120,6 +116,39 @@ export default function App() {
       <ConnectBar wallet={wallet} />
 
       {wallet.error && <Notice kind="warn">{wallet.error}</Notice>}
+
+      {pendingLinkNetwork && (
+        <div style={{ marginBottom: 16 }}>
+          <Notice kind="warn">
+            <div className="row between">
+              <span>
+                This link is for {NETWORKS[pendingLinkNetwork].name} (chain{' '}
+                {NETWORKS[pendingLinkNetwork].chainId}), but the app is on {getNetwork().name} (chain{' '}
+                {getNetwork().chainId}). Safe addresses are the same on every NVNM network, so switching
+                changes whose owners you are looking at.
+              </span>
+              <div className="row">
+                <button className="btn small" onClick={() => wallet.setNetworkKey(pendingLinkNetwork)}>
+                  Switch to {NETWORKS[pendingLinkNetwork].name}
+                </button>
+                <button className="btn small ghost" onClick={() => setLinkNetworkDismissed(true)}>
+                  Stay on {getNetwork().name}
+                </button>
+              </div>
+            </div>
+          </Notice>
+        </div>
+      )}
+
+      {link.mismatch && (
+        <div style={{ marginBottom: 16 }}>
+          <Notice kind="err">
+            This link carries transactions that do not belong to the Safe and network it names
+            {link.skipped ? ` — ${link.skipped} of them were ignored` : ''}. Only the ones matching
+            the Safe below were kept; ask the sender for a link per Safe.
+          </Notice>
+        </div>
+      )}
 
       {wallet.account && !wallet.onCorrectChain && (
         <div style={{ marginBottom: 16 }}>

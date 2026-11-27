@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { formatUnits, type Address, type Hex, type PublicClient } from 'viem'
-import { shortAddress } from '../chain'
+import { FEE_TOKEN, shortAddress } from '../chain'
 import { safeAbi } from '../lib/abi'
 import { readSafeTxHash } from '../lib/coordinate'
 import { useTokenMeta, type TokenMeta } from '../lib/hooks'
-import { callsOf, selectorOf, type PackedCall } from '../lib/decode'
+import { callsOf, nativeValueProblem, selectorOf, type PackedCall } from '../lib/decode'
 import { decodeWithAbis, type AbiEntry, type DecodedWithAbi } from '../lib/contracts'
 import { computeSafeTxHash, safeDomainSeparator, safeTxStructHash, type SafeTxParams } from '../lib/safe'
 import { AddressLink, CopyButton, Notice } from './ui'
@@ -51,20 +51,31 @@ function describe(decoded: DecodedWithAbi | null, selector: Hex, meta: TokenMeta
   return `${name}(${args.map(formatArg).join(', ')})`
 }
 
-/** Decode a call with the registered ABIs; for a token call, also load the token. */
+/**
+ * Decode a call with the registered ABIs. Token metadata (`symbol`, `decimals`) is
+ * only read for a token we know by address — the fee token or an interface bound to
+ * that target — because any contract can report whatever metadata it likes for a
+ * selector that merely looks like `transfer(address,uint256)`.
+ */
 function useDecoded(publicClient: PublicClient, abis: readonly AbiEntry[], call: PackedCall | undefined) {
   const decoded = useMemo(() => (call ? decodeWithAbis(abis, call.to, call.data) : null), [abis, call])
-  const isToken = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name)
-  const meta = useTokenMeta(publicClient, call && isToken ? call.to : null)
-  return { decoded, meta }
+  const bound = Boolean(
+    decoded?.entry.address && call && decoded.entry.address.toLowerCase() === call.to.toLowerCase(),
+  )
+  const trustedToken = Boolean(call) && (bound || call!.to.toLowerCase() === FEE_TOKEN.toLowerCase())
+  const isToken = decoded !== null && TOKEN_FUNCTIONS.has(decoded.fn.name) && trustedToken
+  const meta = useTokenMeta(publicClient, isToken ? call!.to : null)
+  return { decoded, meta, verified: bound || isToken }
 }
 
 /** One-line title of a Safe transaction, read from its calldata. */
 export function TxTitle({ publicClient, abis, tx }: { publicClient: PublicClient; abis: readonly AbiEntry[]; tx: SafeTxParams }) {
   const { batch, calls } = useMemo(() => callsOf(tx), [tx])
-  const { decoded, meta } = useDecoded(publicClient, abis, batch ? undefined : calls[0])
+  const { decoded, meta, verified } = useDecoded(publicClient, abis, batch ? undefined : calls[0])
   if (batch) return `${calls.length} calls (MultiSend)`
-  if (decoded) return describe(decoded, selectorOf(tx.data), meta)
+  // A selector-only match is a guess about an unknown contract; say so.
+  const suffix = verified ? '' : ' (unverified interface)'
+  if (decoded) return `${describe(decoded, selectorOf(tx.data), meta)}${suffix}`
   return `${tx.operation === 1 ? 'Delegatecall' : 'Call'} ${shortAddress(tx.to, 4)}`
 }
 
@@ -136,16 +147,24 @@ function CallRow({
   call,
   index,
   total,
+  packed,
 }: {
   publicClient: PublicClient
   abis: readonly AbiEntry[]
   call: PackedCall
   index: number
   total: number
+  /** True when this entry is inside a MultiSend blob (where the operation byte is ignored). */
+  packed: boolean
 }) {
   const { decoded, meta } = useDecoded(publicClient, abis, call)
   const selector = selectorOf(call.data)
   const summary = useMemo(() => describe(decoded, selector, meta), [decoded, selector, meta])
+  const operation = packed
+    ? 'call (MultiSendCallOnly ignores the operation byte)'
+    : call.operation === 1
+      ? 'delegatecall'
+      : 'call'
 
   return (
     <div className="tx-call">
@@ -159,7 +178,7 @@ function CallRow({
           <AddressLink address={call.to} short={false} />
         </dd>
         <dt>operation</dt>
-        <dd>{call.operation === 1 ? 'delegatecall' : 'call'}</dd>
+        <dd>{operation}</dd>
         {decoded && (
           <>
             <dt>function</dt>
@@ -226,12 +245,21 @@ export function TransactionReview({
       : onchain.safeTxHash.toLowerCase() === hashes.safeTxHash.toLowerCase()
 
   const { batch, calls } = useMemo(() => callsOf(tx), [tx])
+  // No native token on this chain: value is not a risk to weigh, it is a
+  // transaction that cannot run. The queue refuses to sign or execute it.
+  const valueProblem = nativeValueProblem(tx)
 
   return (
     <div className="review">
       <div className="muted small" style={{ marginBottom: 8 }}>
         {batch ? `Batch of ${calls.length} calls via MultiSendCallOnly` : 'Single call'}
       </div>
+
+      {valueProblem && (
+        <Notice kind="err">
+          {valueProblem} Signing and executing are refused.
+        </Notice>
+      )}
 
       <dl className="kv" style={{ margin: '8px 0' }}>
         <HashRow
@@ -261,7 +289,15 @@ export function TransactionReview({
       )}
 
       {calls.map((call, index) => (
-        <CallRow key={index} publicClient={publicClient} abis={abis} call={call} index={index} total={calls.length} />
+        <CallRow
+          key={index}
+          publicClient={publicClient}
+          abis={abis}
+          call={call}
+          index={index}
+          total={calls.length}
+          packed={batch}
+        />
       ))}
 
       <details style={{ marginTop: 10 }}>
@@ -269,6 +305,8 @@ export function TransactionReview({
         <dl className="kv" style={{ marginTop: 8 }}>
           <dt>nonce</dt>
           <dd className="mono">{tx.nonce.toString()}</dd>
+          <dt>value</dt>
+          <dd className="mono">{tx.value.toString()}</dd>
           <dt>safeTxGas</dt>
           <dd className="mono">{tx.safeTxGas.toString()}</dd>
           <dt>baseGas</dt>

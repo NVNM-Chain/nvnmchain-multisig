@@ -1,10 +1,31 @@
 // AUTO-GENERATED from @gnosis.pm/safe-contracts@1.3.0 build artifacts.
-// Safe v1.3.0 contracts, deployed deterministically through the pre-deployed
-// Safe singleton factory ("SafeDeployer") with a zero salt — the official
-// Safe "eip155" deployment set.
+// Safe v1.3.0 contracts, deployed deterministically through the Safe singleton
+// factory (safe-global/safe-singleton-factory) at 0x914d…43d7 with a zero salt.
+// These are the addresses of that variant of the v1.3.0 set: they differ from the
+// ones the older Araoz deployment proxy (0x4e59…956C) produces for the same init
+// code (0x3E5c…/0xa6B71…/0xf48f…/0x40A2…), so tooling that hardcodes the latter
+// will not see Safes created here. See README → Security notes.
 // Do not edit by hand.
 
 export const SAFE_VERSION = "1.3.0" as const
+
+/**
+ * keccak256 of the deployed runtime bytecode (hand-maintained, re-derived by CI).
+ *
+ * Every Safe proxy carries the same 171-byte runtime — `masterCopy()` plus a
+ * delegatecall forwarder — whatever its address or singleton, so its code hash is
+ * an identity, not a claim. What a contract *answers* (`VERSION()`, `getOwners()`,
+ * `getTransactionHash()`) is attacker-controlled and proves nothing: a lookalike can
+ * store the SafeL2 address in slot 0 and report version 1.3.0. So the runtime hash
+ * is the only thing these checks may anchor on.
+ *
+ * `scripts/verify-safe.ts` recomputes both constants from deployments of the
+ * bundled creation code on every run, so they cannot drift silently.
+ */
+export const SAFE_PROXY_RUNTIME_HASH =
+  "0xb89c1b3bdf2cf8827818646bce9a8f6e372885f8c55e5c07acbd307cb133b000" as const
+export const SAFE_L2_RUNTIME_HASH =
+  "0x21842597390c4c6e3c1239e434a682b054bd9548eee5e9b1d6a4482731023c0f" as const
 
 /** Pre-deployed Safe singleton factory ("SafeDeployer") on NVNM Chain. */
 export const CREATE2_FACTORY = "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7" as const

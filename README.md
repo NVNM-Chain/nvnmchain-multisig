@@ -89,7 +89,7 @@ Off-chain and on-chain approvals are merged and deduplicated per owner, then cou
 
 ## Safe contract deployment
 
-NVNM pre-deploys the deterministic **Safe singleton factory** (the "SafeDeployer"; calldata = `salt ‖ initcode`) at `0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7`. Deploying the Safe v1.3.0 bytecode through it with a zero salt reproduces Safe's official **eip155** addresses:
+NVNM pre-deploys the deterministic **Safe singleton factory** (the "SafeDeployer"; calldata = `salt ‖ initcode`) at `0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7`. Deploying the Safe v1.3.0 bytecode through it with a zero salt reproduces the v1.3.0 addresses that this factory derives:
 
 | Contract | Address |
 | --- | --- |
@@ -98,7 +98,7 @@ NVNM pre-deploys the deterministic **Safe singleton factory** (the "SafeDeployer
 | CompatibilityFallbackHandler | `0x017062a1dE2FE6b99BE3d9d37841FeD19F573804` |
 | MultiSendCallOnly | `0xA1dabEF33b3B82c7814B6D82A79e50F4AC44102B` |
 
-The exact `@gnosis.pm/safe-contracts@1.3.0` creation bytecode is bundled in `src/lib/safeArtifacts.ts`; runtime code hashes match `@safe-global/safe-deployments` and each CREATE2 address is re-derived from factory + bytecode. (The same bytecode via the Arachnid factory `0x4e59b448…` lands on Safe's *canonical* set instead; switching is a one-line change in that file.)
+The exact `@gnosis.pm/safe-contracts@1.3.0` creation bytecode is bundled in `src/lib/safeArtifacts.ts` and each address is re-derived from factory + bytecode. Because a CREATE2 address commits to `keccak256(initcode)`, "code exists at that address" *is* a proof that the official bytecode ran there — no other bytecode can occupy it without a 160-bit collision. Note that this is one of two published variants of the v1.3.0 set: the same bytecode through the Arachnid proxy `0x4e59b448…` lands on `0x3E5c…`/`0xa6B71…`/`0xf48f…`/`0x40A2…` instead. Tools that hardcode the Arachnid-derived addresses will not see Safes created here; switching is a one-line change in that file, but it must happen before anything is deployed.
 
 ## Develop
 
@@ -150,14 +150,52 @@ src/
 ## Security
 
 - **Testnet software, unaudited.** Use at your own risk.
+- **The app only operates real Safe v1.3.0 proxies, verified by bytecode.** Loading an
+  address checks `keccak256(getCode(addr))` against the SafeProxy runtime (every Safe
+  proxy carries the same 171-byte runtime — slot 0 plus a delegatecall forwarder — so
+  its hash is an identity, not a claim), then that slot 0 names the official SafeL2
+  singleton, and that the singleton's own runtime matches SafeL2. What the address
+  *answers* (`VERSION()`, `getOwners()`, `getTransactionHash()`) is checked last on
+  purpose: a lookalike contract can store the SafeL2 address in slot 0 and report
+  version 1.3.0, so answers alone would let it collect signatures. The two runtime
+  hashes are pinned in `src/lib/safeArtifacts.ts` and re-derived from real deployments
+  by `scripts/verify-safe.ts`. A Safe is not added to your list unless you press
+  *Remember*, and an unlisted Safe is flagged in the dashboard.
+- **A Safe address is not unique across networks.** The same address exists on
+  mainnet, testnet and canary with a possibly different owner set. A link that
+  names another network is offered, never applied silently, and every signature
+  and transaction is refused unless the wallet is on the network the app is
+  reading (`assertOnCorrectChain`).
 - Signatures are collected off-chain and stored in this browser's `localStorage`.
   A threshold-signed transaction can be executed by anyone, so treat exported
   signatures and share links as sensitive until it runs.
 - A queued transaction is only executable while the Safe's nonce still matches;
   the queue flags stale nonces, offers a rebase onto the next free nonce, and
   re-reads the Safe's nonce before signing, approving or executing.
+- **Review what is decoded, not what is named.** A function is only labelled with
+  token units when the interface is bound to that target address (or the target is
+  the fee token); otherwise the review shows base units plus
+  `(unverified interface)` — any contract can answer `symbol()`/`decimals()` for a
+  selector that merely looks like `transfer(address,uint256)`. Raw target and
+  calldata are always shown.
+- **No native value, ever.** NVNM is a Tempo fork with no native token, so no
+  transaction may carry `value`: the builder never offers a field for it, and the
+  queue refuses to sign, approve or execute a transaction whose `value` — or any
+  call inside a MultiSend batch — is non-zero. A share link can still carry one (it
+  is part of the signed struct), and the review shows it in red rather than letting
+  it look executable.
+- **MultiSendCallOnly ignores the per-call operation byte** and always calls: a
+  batch that sets it is flagged. A gas refund denominated in the native currency
+  cannot be paid on this chain and is flagged as a failing execution.
+- Imports are strict: a queued transaction must hash to its own `id`, every
+  signature must be 65 bytes and recover to the owner it names, and every transaction
+  a link carries must belong to the Safe and network it names. Mixed payloads are
+  flagged and the foreign entries are ignored — including links that name nothing,
+  where the first entry defines the Safe the rest must match.
 - `*.github.io` is one origin for all of an account's Pages projects, so they share
   this app's `localStorage`. Serve it from its own domain to keep the queue private.
+- The page ships a CSP (`index.html`) without `unsafe-eval`, and refuses to render
+  inside a frame, since Pages cannot send `X-Frame-Options`/`frame-ancestors`.
 - Always verify the Safe address, target and calldata in your wallet before signing.
 - A Ledger shows a domain hash and a message hash, not the `safeTxHash`: match them
   against the review's `domainSeparator` and `structHash` before approving.
